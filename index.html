@@ -89,9 +89,11 @@
             border-bottom: 2px solid var(--primary);
             padding-bottom: 8px;
             margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
-        <h1> {
+        h1 {
             font-size: 1.6rem;
             margin: 0;
             color: var(--primary);
@@ -108,7 +110,7 @@
             background-color: #fef2f2;
         }
 
-        <h2> {
+        h2 {
             font-size: 1.2rem;
             margin-top: 35px;
             margin-bottom: 15px;
@@ -374,12 +376,21 @@
             </div>
             <button type="submit" class="btn-login">Entrar</button>
         </form>
+        <button type="button" onclick="handleGoogleLogin()" style="width: 100%; background-color: #ffffff; color: #444; border: 1px solid #cbd5e1; padding: 12px; font-size: 1rem; margin-top: 10px; font-weight: bold; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius:4px; cursor:pointer;">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="18"> Entrar com o Google
+        </button>
     </div>
 
     <div class="wrapper" id="mainDashboard">
         <div class="header-box">
             <h1>Controle Financeiro Integrado</h1>
-            <button class="btn-logout" onclick="handleLogout()">🚪 Sair</button>
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <label for="viewPeriod" style="font-weight: bold; font-size: 0.9rem; color: var(--primary);">Mês de Referência:</label>
+                    <input type="month" id="viewPeriod" style="padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; font-family: Arial, sans-serif; font-size: 0.9rem;" onchange="window.updatePeriodChange()">
+                </div>
+                <button class="btn-logout" onclick="handleLogout()">🚪 Sair</button>
+            </div>
         </div>
         
         <table class="summary-table">
@@ -391,7 +402,7 @@
                         <button class="btn-action" onclick="ajustarSaldoCC()">✏️ Ajustar</button>
                     </div>
                     <div class="projected-box" title="Inclui salários agendados e contas futuras">
-                        ↳ Agendado: <strong id="ccFuture" class="text-future" style="margin: 0 8px;">R$ 0,00</strong> | 
+                        ↳ Agendado no Mês: <strong id="ccFuture" class="text-future" style="margin: 0 8px;">R$ 0,00</strong> | 
                         Projetado Final: <strong id="ccProjected" style="margin-left: 8px;">R$ 0,00</strong>
                     </div>
                 </td>
@@ -404,7 +415,7 @@
                 </td>
             </tr>
             <tr>
-                <td class="label">Cartão (Fatura Atual)</td>
+                <td class="label">Cartão (Fatura no Período)</td>
                 <td class="value">
                     <div class="val-box">
                         <span id="cardInvoice" class="text-out">R$ 0,00</span>
@@ -462,7 +473,7 @@
                     </div>
 
                     <div class="form-field">
-                        <label for="txDate">Data e Hora (Pode ser Futura)</label>
+                        <label for="txDate">Data e Hora</label>
                         <input type="datetime-local" id="txDate" required>
                     </div>
                 </div>
@@ -515,7 +526,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
 
         // ==========================================
@@ -534,6 +545,7 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+        const googleProvider = new GoogleAuthProvider();
 
         // Variáveis globais mutáveis carregadas do banco
         let transactions = [];
@@ -545,6 +557,13 @@
             if (user) {
                 document.getElementById('loginBlock').style.display = 'none';
                 document.getElementById('mainDashboard').style.display = 'block';
+                
+                if (!document.getElementById('viewPeriod').value) {
+                    const now = new Date();
+                    document.getElementById('viewPeriod').value = now.toISOString().slice(0, 7);
+                }
+                
+                setDefaultDateTime();
                 initRealtimeSync();
             } else {
                 document.getElementById('loginBlock').style.display = 'block';
@@ -567,10 +586,23 @@
             }
         }
 
+        window.handleGoogleLogin = async function() {
+            try {
+                await signInWithPopup(auth, googleProvider);
+            } catch (error) {
+                alert("Erro ao entrar com o Google: " + error.message);
+            }
+        }
+
         window.handleLogout = async function() {
             if(confirm("Deseja desconectar do sistema?")) {
                 await signOut(auth);
             }
+        }
+
+        window.updatePeriodChange = function() {
+            setDefaultDateTime();
+            recalculateAndRender();
         }
 
         // Sincronização Ativa em Nuvem (Firestore -> View)
@@ -601,15 +633,39 @@
             });
         }
 
-        // --- AUXILIARES E FORMATADORES ---
+        // --- AUXILIARES E FORMATADORES DE DATA CONTEXTUALIZADOS ---
         function setDefaultDateTime() {
             const now = new Date();
+            const periodVal = document.getElementById('viewPeriod').value;
+            
+            if (periodVal) {
+                const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+                const selMonth = selMonthIdx - 1;
+                
+                if (now.getFullYear() !== selYear || now.getMonth() !== selMonth) {
+                    const targetDate = new Date(selYear, selMonth, 1, 12, 0);
+                    targetDate.setMinutes(targetDate.getMinutes() - targetDate.getTimezoneOffset());
+                    document.getElementById('txDate').value = targetDate.toISOString().slice(0, 16);
+                    return;
+                }
+            }
+            
             now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
             document.getElementById('txDate').value = now.toISOString().slice(0, 16);
         }
 
-        function getLocalDateString() {
+        function getTransactionDateContext() {
             const now = new Date();
+            const periodVal = document.getElementById('viewPeriod').value;
+            if (periodVal) {
+                const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+                const selMonth = selMonthIdx - 1;
+                if (now.getFullYear() !== selYear || now.getMonth() !== selMonth) {
+                    const lastDay = new Date(selYear, selMonth + 1, 0, 23, 50);
+                    lastDay.setMinutes(lastDay.getMinutes() - lastDay.getTimezoneOffset());
+                    return lastDay.toISOString().slice(0, 16);
+                }
+            }
             now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
             return now.toISOString().slice(0, 16);
         }
@@ -644,8 +700,9 @@
             tbody.innerHTML = '';
             
             let total = 0;
-            const currentMonth = new Date().getMonth();
-            const currentYear = new Date().getFullYear();
+            const periodVal = document.getElementById('viewPeriod').value || new Date().toISOString().slice(0, 7);
+            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+            const selMonth = selMonthIdx - 1;
 
             fixedExpenses.forEach((exp) => {
                 total += exp.amount;
@@ -653,7 +710,7 @@
                 const isPaid = transactions.some(t => {
                     if (t.description !== exp.name) return false;
                     const tDate = new Date(t.date);
-                    return tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear && t.type.includes('gasto');
+                    return tDate.getMonth() === selMonth && tDate.getFullYear() === selYear && t.type.includes('gasto');
                 });
 
                 const tr = document.createElement('tr');
@@ -755,7 +812,7 @@
             }, 1500);
         }
 
-        // --- TRANSAÇÕES E AJUSTES ---
+        // --- TRANSAÇÕES E AJUSTES CONTÍNUOS EM LINHA DO TEMPO ---
         window.deleteTransaction = async function(id) {
             if (confirm("Deseja excluir este lançamento do extrato definitivo?")) {
                 await deleteDoc(doc(db, "transactions", id));
@@ -780,15 +837,20 @@
         window.ajustarSaldoCC = async function() {
             let currentCC = 0;
             const now = new Date();
+            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
+            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+            const selMonth = selMonthIdx - 1;
+            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
+
             transactions.forEach(t => {
                 const txDate = new Date(t.date);
-                if (txDate <= now) {
+                if (txDate <= endOfSelectedMonth && txDate <= now) {
                     if (t.type === 'entrada' || t.type === 'ajuste_cc_entrada') currentCC += t.amount;
                     if (t.type === 'gasto_cc' || t.type === 'pagamento_fatura' || t.type === 'ajuste_cc_saida') currentCC -= t.amount;
                 }
             });
 
-            const input = prompt(`Ajuste o saldo ATUAL da Conta Corrente (Disponível HOJE):`, currentCC.toFixed(2));
+            const input = prompt(`Ajuste o saldo da Conta Corrente para fecho do mês selecionado:`, currentCC.toFixed(2));
             if (input === null || input.trim() === '') return;
             const newVal = parseFloat(input.replace(',', '.'));
             if (isNaN(newVal)) return alert("Valor inválido.");
@@ -800,19 +862,28 @@
                 type: diff > 0 ? 'ajuste_cc_entrada' : 'ajuste_cc_saida',
                 amount: Math.abs(diff),
                 category: 'Outros',
-                date: getLocalDateString(),
+                date: getTransactionDateContext(),
                 description: 'Ajuste manual de saldo (Conta Corrente)'
             });
         }
 
         window.ajustarFatura = async function() {
             let currentInvoice = 0;
+            const now = new Date();
+            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
+            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+            const selMonth = selMonthIdx - 1;
+            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
+
             transactions.forEach(t => {
-                if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') currentInvoice += t.amount;
-                if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') currentInvoice -= t.amount;
+                const txDate = new Date(t.date);
+                if(txDate <= endOfSelectedMonth) {
+                    if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') currentInvoice += t.amount;
+                    if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') currentInvoice -= t.amount;
+                }
             });
 
-            const input = prompt(`Ajuste o valor EXATO da sua Fatura Atual:`, currentInvoice.toFixed(2));
+            const input = prompt(`Ajuste o valor da Fatura acumulada até este período:`, currentInvoice.toFixed(2));
             if (input === null || input.trim() === '') return;
             const newVal = parseFloat(input.replace(',', '.'));
             if (isNaN(newVal)) return alert("Valor inválido.");
@@ -824,23 +895,32 @@
                 type: diff > 0 ? 'ajuste_cartao_aumento' : 'ajuste_cartao_reducao',
                 amount: Math.abs(diff),
                 category: 'Outros',
-                date: getLocalDateString(),
+                date: getTransactionDateContext(),
                 description: 'Ajuste manual de fatura (Cartão de Crédito)'
             });
         }
 
-        // --- RENDERIZAÇÃO E PROCESSAMENTO DOS ENCAIXES ---
+        // --- CÁLCULOS FILTRADOS POR MÊS E CONTINUIDADE RETROATIVA ---
         function recalculateAndRender() {
             let currentCC = 0;
             let futureCC = 0;
             let cardInvoice = 0;
             
             const now = new Date();
+            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
+            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+            const selMonth = selMonthIdx - 1;
+            
+            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
             const ledgerBody = document.getElementById('ledgerBody');
             ledgerBody.innerHTML = '';
 
             transactions.forEach(t => {
                 const txDate = new Date(t.date);
+                
+                // Ignora transações que pertencem ao futuro distante (pós mês selecionado)
+                if (txDate > endOfSelectedMonth) return;
+
                 const isFuture = txDate > now;
 
                 if (t.type === 'entrada' || t.type === 'ajuste_cc_entrada') {
@@ -853,7 +933,7 @@
                 }
 
                 if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') cardInvoice += t.amount;
-                if (t.type === 'ajuste_cartao_reducao') cardInvoice -= t.amount;
+                if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') cardInvoice -= t.amount;
             });
 
             let projectedCC = currentCC + futureCC;
@@ -887,12 +967,18 @@
 
             renderFixedExpenses();
 
-            if (transactions.length === 0) {
-                ledgerBody.innerHTML = `<tr><td colspan="6" class="no-data">Nenhum registro sincronizado em nuvem.</td></tr>`;
+            // Filtra o extrato exibido para incluir apenas os registros do mês correspondente
+            const filteredTransactions = transactions.filter(t => {
+                const tDate = new Date(t.date);
+                return tDate.getMonth() === selMonth && tDate.getFullYear() === selYear;
+            });
+
+            if (filteredTransactions.length === 0) {
+                ledgerBody.innerHTML = `<tr><td colspan="6" class="no-data">Nenhum registro encontrado para este mês de referência.</td></tr>`;
                 return;
             }
 
-            const sortedTransactions = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+            const sortedTransactions = [...filteredTransactions].sort((a, b) => new Date(b.date) - new Date(a.date));
 
             sortedTransactions.forEach(t => {
                 const txDate = new Date(t.date);
@@ -946,23 +1032,32 @@
             
             document.getElementById('txAmount').value = '';
             document.getElementById('txDescription').value = '';
-            if(new Date(date) <= new Date()) setDefaultDateTime();
+            setDefaultDateTime();
         }
 
         window.payCardInvoice = async function() {
             let currentInvoice = 0;
+            const now = new Date();
+            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
+            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+            const selMonth = selMonthIdx - 1;
+            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
+
             transactions.forEach(t => {
-                if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') currentInvoice += t.amount;
-                if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') currentInvoice -= t.amount;
+                const txDate = new Date(t.date);
+                if(txDate <= endOfSelectedMonth) {
+                    if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') currentInvoice += t.amount;
+                    if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') currentInvoice -= t.amount;
+                }
             });
-            if (currentInvoice <= 0) return alert("A fatura atual do cartão já está zerada.");
+            if (currentInvoice <= 0) return alert("A fatura acumulada para este período já está zerada.");
 
             if (confirm(`Deseja pagar a fatura de ${formatCurrency(currentInvoice)} usando a Conta Corrente?`)) {
                 await addDoc(collection(db, "transactions"), {
                     type: 'pagamento_fatura', 
                     amount: currentInvoice,
                     category: 'Moradia', 
-                    date: getLocalDateString(), 
+                    date: getTransactionDateContext(), 
                     description: 'Pagamento Integral de Fatura de Cartão'
                 });
             }
