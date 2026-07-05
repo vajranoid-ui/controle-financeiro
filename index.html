@@ -252,6 +252,44 @@
         .btn-save { background-color: var(--primary); color: white; }
         .btn-pay { background-color: #e2e8f0; border-color: var(--border-color); color: var(--neutral-dark); }
         .btn-pay:hover { background-color: #cbd5e1; }
+
+        /* ===== IMPORTAR JSON (Claude) ===== */
+        .import-panel {
+            display: none;
+            margin-top: 15px;
+            padding: 15px;
+            border: 1px dashed var(--border-color);
+            border-radius: 6px;
+            background-color: #f8fafc;
+        }
+        .import-panel.open { display: block; }
+        .import-panel textarea {
+            width: 100%;
+            min-height: 140px;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.8rem;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        .import-panel .import-hint {
+            font-size: 0.78rem;
+            color: var(--neutral-dark);
+            margin: 6px 0 10px 0;
+        }
+        .import-preview {
+            margin-top: 10px;
+            font-size: 0.82rem;
+        }
+        .import-preview table { width: 100%; border-collapse: collapse; }
+        .import-preview th, .import-preview td {
+            padding: 5px 8px;
+            border-bottom: 1px solid var(--border-color);
+            text-align: left;
+        }
+        .import-error { color: #b91c1c; font-size: 0.82rem; margin-top: 8px; white-space: pre-wrap; }
         .btn-action { background-color: #ffffff; border: 1px solid var(--border-color); font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
         .btn-action:hover { background-color: #f1f5f9; }
         .btn-salary { background-color: #dcfce7; color: var(--success); border: 1px solid #86efac; font-size: 0.85rem; padding: 6px 12px; }
@@ -661,10 +699,27 @@
                 </div>
 
                 <div class="actions-bar">
+                    <button type="button" class="btn-pay" onclick="toggleImportPanel()">Importar JSON</button>
                     <button type="button" class="btn-pay" onclick="payCardInvoice()">Pagar Fatura do Cartão</button>
                     <button type="submit" class="btn-save" id="btnSaveSubmit">Salvar Registro</button>
                 </div>
             </form>
+
+            <!-- ===== PAINEL DE IMPORTAÇÃO VIA JSON (gerado pelo Claude a partir de cupons fiscais) ===== -->
+            <div class="import-panel" id="importPanel">
+                <label for="importJsonInput" style="font-weight:bold; font-size:0.85rem;">Cole aqui o JSON gerado pelo Claude</label>
+                <p class="import-hint">
+                    Aceita um objeto único ou uma lista. Campos: <code>type</code> (entrada, gasto_cc, gasto_cartao),
+                    <code>amount</code>, <code>category</code>, <code>date</code> (AAAA-MM-DDTHH:MM) e <code>description</code>.
+                </p>
+                <textarea id="importJsonInput" placeholder='[{"type":"gasto_cc","amount":34.90,"category":"Alimentação / Fast Food","date":"2026-07-05T15:44","description":"Bonanza — pão, café, morango (Pix)"}]'></textarea>
+                <div class="import-error" id="importError"></div>
+                <div class="import-preview" id="importPreview"></div>
+                <div class="actions-bar">
+                    <button type="button" class="btn-pay" onclick="previewImportJson()">Pré-visualizar</button>
+                    <button type="button" class="btn-save" id="btnImportConfirm" onclick="confirmImportJson()" disabled style="opacity:0.5;">Importar Registros</button>
+                </div>
+            </div>
         </div>
 
         <h2>Extrato Detalhado de Transações</h2>
@@ -1572,6 +1627,112 @@
             document.getElementById('txAmount').value = '';
             document.getElementById('txDescription').value = '';
             setDefaultDateTime();
+        }
+
+        // --- IMPORTAR TRANSAÇÕES VIA JSON (fluxo: foto do cupom → Claude → colar aqui) ---
+        const VALID_TYPES = ['entrada', 'gasto_cc', 'gasto_cartao'];
+        const VALID_CATEGORIES = [
+            'Alimentação / Fast Food', 'Transporte', 'Assinaturas (IA & Softwares)',
+            'Família & Pets', 'Moradia', 'Educação & Esportes', 'Receita / Salário', 'Outros'
+        ];
+        let pendingImport = [];
+
+        window.toggleImportPanel = function() {
+            const panel = document.getElementById('importPanel');
+            panel.classList.toggle('open');
+            if (!panel.classList.contains('open')) resetImportPanel();
+        }
+
+        function resetImportPanel() {
+            pendingImport = [];
+            document.getElementById('importJsonInput').value = '';
+            document.getElementById('importError').textContent = '';
+            document.getElementById('importPreview').innerHTML = '';
+            const btn = document.getElementById('btnImportConfirm');
+            btn.disabled = true;
+            btn.style.opacity = '0.5';
+        }
+
+        function validateImportItem(item, idx) {
+            const errors = [];
+            const tx = {
+                type: String(item.type || 'gasto_cc').trim(),
+                amount: parseFloat(item.amount),
+                category: String(item.category || 'Outros').trim(),
+                date: String(item.date || '').trim(),
+                description: String(item.description || '').trim()
+            };
+            if (!VALID_TYPES.includes(tx.type)) errors.push(`Item ${idx + 1}: tipo "${tx.type}" inválido (use: ${VALID_TYPES.join(', ')}).`);
+            if (isNaN(tx.amount) || tx.amount <= 0) errors.push(`Item ${idx + 1}: valor inválido.`);
+            if (!VALID_CATEGORIES.includes(tx.category)) tx.category = 'Outros';
+            if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(tx.date)) errors.push(`Item ${idx + 1}: data inválida (use AAAA-MM-DDTHH:MM).`);
+            else tx.date = tx.date.slice(0, 16);
+            return { tx, errors };
+        }
+
+        window.previewImportJson = function() {
+            const errEl = document.getElementById('importError');
+            const prevEl = document.getElementById('importPreview');
+            const btn = document.getElementById('btnImportConfirm');
+            errEl.textContent = '';
+            prevEl.innerHTML = '';
+            pendingImport = [];
+            btn.disabled = true;
+            btn.style.opacity = '0.5';
+
+            let raw = document.getElementById('importJsonInput').value.trim();
+            if (!raw) { errEl.textContent = 'Cole o JSON antes de pré-visualizar.'; return; }
+            raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '');
+
+            let parsed;
+            try { parsed = JSON.parse(raw); }
+            catch (e) { errEl.textContent = 'JSON inválido: ' + e.message; return; }
+
+            const items = Array.isArray(parsed) ? parsed : [parsed];
+            if (items.length === 0) { errEl.textContent = 'Nenhum registro encontrado no JSON.'; return; }
+
+            const allErrors = [];
+            items.forEach((item, idx) => {
+                const { tx, errors } = validateImportItem(item, idx);
+                if (errors.length) allErrors.push(...errors);
+                else pendingImport.push(tx);
+            });
+
+            if (allErrors.length) {
+                errEl.textContent = allErrors.join('\n');
+                pendingImport = [];
+                return;
+            }
+
+            const total = pendingImport.reduce((s, t) => s + (t.type === 'entrada' ? 0 : t.amount), 0);
+            let html = '<table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th></tr></thead><tbody>';
+            pendingImport.forEach(t => {
+                const d = new Date(t.date);
+                html += `<tr><td>${d.toLocaleDateString('pt-BR')} ${t.date.slice(11, 16)}</td><td>${t.description || '—'}</td><td>${t.category}</td><td>${t.type}</td><td>${formatCurrency(t.amount)}</td></tr>`;
+            });
+            html += `</tbody></table><p style="margin-top:8px;"><strong>${pendingImport.length} registro(s)</strong>${total > 0 ? ' · Total em gastos: <strong>' + formatCurrency(total) + '</strong>' : ''}</p>`;
+            prevEl.innerHTML = html;
+            btn.disabled = false;
+            btn.style.opacity = '1';
+        }
+
+        window.confirmImportJson = async function() {
+            if (!pendingImport.length) return;
+            const btn = document.getElementById('btnImportConfirm');
+            btn.disabled = true;
+            btn.textContent = 'Importando...';
+            try {
+                for (const tx of pendingImport) {
+                    await addDoc(collection(db, "transactions"), tx);
+                }
+                alert(`${pendingImport.length} registro(s) importado(s) com sucesso!`);
+                resetImportPanel();
+                document.getElementById('importPanel').classList.remove('open');
+            } catch (e) {
+                document.getElementById('importError').textContent = 'Erro ao salvar: ' + e.message;
+            } finally {
+                btn.textContent = 'Importar Registros';
+            }
         }
 
         window.payCardInvoice = async function() {
