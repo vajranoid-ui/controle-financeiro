@@ -290,6 +290,7 @@
             text-align: left;
         }
         .import-error { color: #b91c1c; font-size: 0.82rem; margin-top: 8px; white-space: pre-wrap; }
+        .tx-location { display: block; font-size: 0.75rem; color: #64748b; margin-top: 2px; }
         .btn-action { background-color: #ffffff; border: 1px solid var(--border-color); font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
         .btn-action:hover { background-color: #f1f5f9; }
         .btn-salary { background-color: #dcfce7; color: var(--success); border: 1px solid #86efac; font-size: 0.85rem; padding: 6px 12px; }
@@ -698,6 +699,11 @@
                     <input type="text" id="txDescription" placeholder="Ex: Pagamento, Mercado, Abastecimento...">
                 </div>
 
+                <div class="form-field" style="margin-bottom: 15px;">
+                    <label for="txLocation">Local da Compra (Opcional)</label>
+                    <input type="text" id="txLocation" placeholder="Ex: Bonanza, Nutripet, Posto Ipiranga... (deixe vazio se não souber)">
+                </div>
+
                 <div class="actions-bar">
                     <button type="button" class="btn-pay" onclick="toggleImportPanel()">Importar JSON</button>
                     <button type="button" class="btn-pay" onclick="payCardInvoice()">Pagar Fatura do Cartão</button>
@@ -710,9 +716,10 @@
                 <label for="importJsonInput" style="font-weight:bold; font-size:0.85rem;">Cole aqui o JSON gerado pelo Claude</label>
                 <p class="import-hint">
                     Aceita um objeto único ou uma lista. Campos: <code>type</code> (entrada, gasto_cc, gasto_cartao),
-                    <code>amount</code>, <code>category</code>, <code>date</code> (AAAA-MM-DDTHH:MM) e <code>description</code>.
+                    <code>amount</code>, <code>category</code>, <code>date</code> (AAAA-MM-DDTHH:MM), <code>description</code>
+                    e <code>location</code> (opcional — deixe vazio se não souber onde foi a compra).
                 </p>
-                <textarea id="importJsonInput" placeholder='[{"type":"gasto_cc","amount":34.90,"category":"Alimentação / Fast Food","date":"2026-07-05T15:44","description":"Bonanza — pão, café, morango (Pix)"}]'></textarea>
+                <textarea id="importJsonInput" placeholder='[{"type":"gasto_cc","amount":7.32,"category":"Alimentação / Fast Food","date":"2026-07-05T15:44","description":"Pão francês 0,488kg (Pix)","location":"Bonanza Supermercados"}]'></textarea>
                 <div class="import-error" id="importError"></div>
                 <div class="import-preview" id="importPreview"></div>
                 <div class="actions-bar">
@@ -1416,7 +1423,7 @@
 
                 tr.innerHTML = `
                     <td>${dateDisplay}</td>
-                    <td>${escapeHtml(t.description || 'Sem descrição')}</td>
+                    <td>${escapeHtml(t.description || 'Sem descrição')}${t.location ? `<span class="tx-location">📍 ${escapeHtml(t.location)}</span>` : ''}</td>
                     <td>${escapeHtml(t.category)}</td>
                     <td>${meta.origin}</td>
                     <td class="${meta.cls}">${meta.sign}${formatCurrency(t.amount)}</td>
@@ -1542,7 +1549,7 @@
                         const meta = txDisplayMeta(t, false);
                         return `<tr>
                             <td>${formatDate(t.date)}</td>
-                            <td>${escapeHtml(t.description || 'Sem descrição')}</td>
+                            <td>${escapeHtml(t.description || 'Sem descrição')}${t.location ? `<span class="tx-location">📍 ${escapeHtml(t.location)}</span>` : ''}</td>
                             <td>${escapeHtml(t.category)}</td>
                             <td>${meta.origin}</td>
                             <td class="${meta.cls}">${meta.sign}${formatCurrency(t.amount)}</td>
@@ -1583,7 +1590,7 @@
             if (!g) return;
 
             const csvEscape = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
-            const lines = ['Data;Descricao;Categoria;Tipo;Valor'];
+            const lines = ['Data;Descricao;Local;Categoria;Tipo;Valor'];
             const sorted = [...g.items].sort((a, b) => new Date(a.date) - new Date(b.date));
             sorted.forEach(t => {
                 const meta = txDisplayMeta(t, false);
@@ -1591,15 +1598,16 @@
                 lines.push([
                     csvEscape(formatDate(t.date)),
                     csvEscape(t.description || 'Sem descrição'),
+                    csvEscape(t.location || ''),
                     csvEscape(t.category),
                     csvEscape(meta.origin),
                     csvEscape(signedValue)
                 ].join(';'));
             });
             lines.push('');
-            lines.push([csvEscape('TOTAL ENTRADAS'), '', '', '', csvEscape(g.entradas.toFixed(2).replace('.', ','))].join(';'));
-            lines.push([csvEscape('TOTAL SAIDAS'), '', '', '', csvEscape(('-' + g.saidas.toFixed(2)).replace('.', ','))].join(';'));
-            lines.push([csvEscape('RESULTADO'), '', '', '', csvEscape((g.entradas - g.saidas).toFixed(2).replace('.', ','))].join(';'));
+            lines.push([csvEscape('TOTAL ENTRADAS'), '', '', '', '', csvEscape(g.entradas.toFixed(2).replace('.', ','))].join(';'));
+            lines.push([csvEscape('TOTAL SAIDAS'), '', '', '', '', csvEscape(('-' + g.saidas.toFixed(2)).replace('.', ','))].join(';'));
+            lines.push([csvEscape('RESULTADO'), '', '', '', '', csvEscape((g.entradas - g.saidas).toFixed(2).replace('.', ','))].join(';'));
 
             const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
             const a = document.createElement('a');
@@ -1619,13 +1627,15 @@
             const category = document.getElementById('txCategory').value;
             const date = document.getElementById('txDate').value;
             const description = document.getElementById('txDescription').value;
+            const location = document.getElementById('txLocation').value.trim();
 
             if (isNaN(amount) || amount <= 0) return alert("Informe um valor válido maior que zero.");
 
-            await addDoc(collection(db, "transactions"), { type, amount, category, date, description });
+            await addDoc(collection(db, "transactions"), { type, amount, category, date, description, location });
 
             document.getElementById('txAmount').value = '';
             document.getElementById('txDescription').value = '';
+            document.getElementById('txLocation').value = '';
             setDefaultDateTime();
         }
 
@@ -1660,7 +1670,8 @@
                 amount: parseFloat(item.amount),
                 category: String(item.category || 'Outros').trim(),
                 date: String(item.date || '').trim(),
-                description: String(item.description || '').trim()
+                description: String(item.description || '').trim(),
+                location: String(item.location || '').trim()
             };
             if (!VALID_TYPES.includes(tx.type)) errors.push(`Item ${idx + 1}: tipo "${tx.type}" inválido (use: ${VALID_TYPES.join(', ')}).`);
             if (isNaN(tx.amount) || tx.amount <= 0) errors.push(`Item ${idx + 1}: valor inválido.`);
@@ -1705,10 +1716,10 @@
             }
 
             const total = pendingImport.reduce((s, t) => s + (t.type === 'entrada' ? 0 : t.amount), 0);
-            let html = '<table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Valor</th></tr></thead><tbody>';
+            let html = '<table><thead><tr><th>Data</th><th>Descrição</th><th>Local</th><th>Categoria</th><th>Tipo</th><th>Valor</th></tr></thead><tbody>';
             pendingImport.forEach(t => {
                 const d = new Date(t.date);
-                html += `<tr><td>${d.toLocaleDateString('pt-BR')} ${t.date.slice(11, 16)}</td><td>${t.description || '—'}</td><td>${t.category}</td><td>${t.type}</td><td>${formatCurrency(t.amount)}</td></tr>`;
+                html += `<tr><td>${d.toLocaleDateString('pt-BR')} ${t.date.slice(11, 16)}</td><td>${t.description || '—'}</td><td>${t.location || '—'}</td><td>${t.category}</td><td>${t.type}</td><td>${formatCurrency(t.amount)}</td></tr>`;
             });
             html += `</tbody></table><p style="margin-top:8px;"><strong>${pendingImport.length} registro(s)</strong>${total > 0 ? ' · Total em gastos: <strong>' + formatCurrency(total) + '</strong>' : ''}</p>`;
             prevEl.innerHTML = html;
