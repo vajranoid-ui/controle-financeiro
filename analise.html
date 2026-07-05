@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análise de Preços · Controle Financeiro</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --primary: #1e3a8a;
+            --primary-soft: #e0e7ff;
+            --success: #15803d;
+            --danger: #b91c1c;
+            --warning: #d97706;
+            --neutral-dark: #334155;
+            --neutral-light: #f8fafc;
+            --border-color: #cbd5e1;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f1f5f9;
+            margin: 0;
+            padding: 15px;
+            color: var(--neutral-dark);
+        }
+
+        .wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 25px;
+            display: none;
+        }
+
+        .header-box {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            border-bottom: 2px solid var(--primary);
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+
+        h1 { color: var(--primary); font-size: 1.4rem; margin: 0; }
+        h2 {
+            color: var(--primary);
+            font-size: 1.05rem;
+            margin: 35px 0 12px 0;
+            border-left: 4px solid var(--primary);
+            padding-left: 10px;
+        }
+        h2 .subtitle-info { font-weight: normal; font-size: 0.8rem; color: #64748b; margin-left: 8px; }
+
+        a.btn-back {
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 0.85rem;
+            color: var(--primary);
+            border: 1px solid var(--border-color);
+            padding: 8px 14px;
+            border-radius: 4px;
+            background: #fff;
+        }
+        a.btn-back:hover { background: var(--primary-soft); }
+
+        .filters {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            background: var(--neutral-light);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 14px;
+        }
+        .filters .field { display: flex; flex-direction: column; gap: 4px; }
+        .filters label { font-size: 0.78rem; font-weight: bold; }
+        .filters input, .filters select {
+            padding: 7px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: Arial, sans-serif;
+            font-size: 0.88rem;
+        }
+
+        .chart-box {
+            position: relative;
+            width: 100%;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            background: #fff;
+        }
+        .chart-box canvas { max-width: 100%; }
+
+        .no-data-msg {
+            text-align: center;
+            color: #64748b;
+            font-size: 0.88rem;
+            padding: 25px 10px;
+            font-style: italic;
+        }
+
+        .search-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+        .search-row input {
+            flex: 1;
+            min-width: 200px;
+            padding: 9px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        .search-row button {
+            padding: 9px 18px;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 0.88rem;
+            cursor: pointer;
+            background-color: var(--primary);
+            color: #fff;
+        }
+
+        .hint { font-size: 0.78rem; color: #64748b; margin: 4px 0 0 0; }
+
+        table.matches {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.84rem;
+            margin-top: 14px;
+        }
+        table.matches th, table.matches td {
+            border: 1px solid var(--border-color);
+            padding: 7px 9px;
+            text-align: left;
+        }
+        table.matches th { background: var(--neutral-light); }
+        .table-scroll { overflow-x: auto; }
+        .best-price { color: var(--success); font-weight: bold; }
+
+        /* Login (mesmo padrão do painel principal) */
+        .login-wrapper {
+            max-width: 380px;
+            margin: 60px auto;
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 28px;
+        }
+        .login-wrapper h1 { text-align: center; margin-bottom: 20px; font-size: 1.2rem; }
+        .login-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+        .login-field label { font-size: 0.82rem; font-weight: bold; }
+        .login-field input { padding: 10px; border: 1px solid var(--border-color); border-radius: 4px; }
+        .btn-login {
+            width: 100%;
+            background-color: var(--primary);
+            color: #fff;
+            border: none;
+            padding: 12px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn-google {
+            width: 100%;
+            background-color: #ffffff;
+            color: #444;
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            font-size: 1rem;
+            margin-top: 10px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        @media (max-width: 700px) {
+            body { padding: 8px; }
+            .wrapper { padding: 14px; }
+            h1 { font-size: 1.15rem; }
+            .header-box { flex-direction: column; align-items: stretch; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition: none !important; animation: none !important; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-wrapper" id="loginBlock">
+        <h1>🔒 Análise de Preços</h1>
+        <form onsubmit="handleLogin(event)">
+            <div class="login-field">
+                <label for="loginEmail">E-mail</label>
+                <input type="email" id="loginEmail" required placeholder="seu@email.com">
+            </div>
+            <div class="login-field">
+                <label for="loginPassword">Senha</label>
+                <input type="password" id="loginPassword" required placeholder="******">
+            </div>
+            <button type="submit" class="btn-login">Entrar</button>
+        </form>
+        <button type="button" class="btn-google" onclick="handleGoogleLogin()">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="18" alt=""> Entrar com o Google
+        </button>
+    </div>
+
+    <div class="wrapper" id="mainDashboard">
+        <div class="header-box">
+            <h1>📊 Análise de Preços e Estabelecimentos</h1>
+            <a class="btn-back" href="index.html">← Voltar ao Painel</a>
+        </div>
+
+        <div class="filters">
+            <div class="field">
+                <label for="periodFrom">De (mês)</label>
+                <input type="month" id="periodFrom" onchange="renderAll()">
+            </div>
+            <div class="field">
+                <label for="periodTo">Até (mês)</label>
+                <input type="month" id="periodTo" onchange="renderAll()">
+            </div>
+            <div class="field">
+                <label for="originFilter">Origem do gasto</label>
+                <select id="originFilter" onchange="renderAll()">
+                    <option value="todos">Débito + Cartão</option>
+                    <option value="gasto_cc">Somente Débito (CC)</option>
+                    <option value="gasto_cartao">Somente Cartão de Crédito</option>
+                </select>
+            </div>
+        </div>
+
+        <h2>Gastos por Estabelecimento <span class="subtitle-info">total no período selecionado</span></h2>
+        <div class="chart-box">
+            <canvas id="chartByLocation" height="130"></canvas>
+            <div class="no-data-msg" id="msgByLocation" style="display:none;"></div>
+        </div>
+        <p class="hint">Registros sem local informado são agrupados em "Sem local". Preencha o campo Local da Compra para enriquecer esta análise.</p>
+
+        <h2>Linha do Tempo de Gastos <span class="subtitle-info">evolução mensal por estabelecimento</span></h2>
+        <div class="chart-box">
+            <canvas id="chartTimeline" height="140"></canvas>
+            <div class="no-data-msg" id="msgTimeline" style="display:none;"></div>
+        </div>
+        <p class="hint">Mostra os 5 estabelecimentos com maior gasto no período, além da linha tracejada com o total geral.</p>
+
+        <h2>Comparador de Preço de Produto <span class="subtitle-info">acompanhe um item ao longo do tempo</span></h2>
+        <div class="search-row">
+            <input type="text" id="productSearch" placeholder='Ex: café, pão francês, Dog Chow...' onkeydown="if(event.key==='Enter'){event.preventDefault();searchProduct();}">
+            <button type="button" onclick="searchProduct()">Comparar Preços</button>
+        </div>
+        <p class="hint">Busca nas descrições dos registros (ignora acentos e maiúsculas). Quando a descrição indica quantidade — ex.: "(3x R$10,00)" — o gráfico usa o preço unitário; caso contrário, usa o valor do registro.</p>
+        <div class="chart-box" style="margin-top:12px;">
+            <canvas id="chartProduct" height="140"></canvas>
+            <div class="no-data-msg" id="msgProduct">Digite o nome de um produto acima para comparar preços entre estabelecimentos e ao longo do tempo.</div>
+        </div>
+        <div class="table-scroll" id="productTableWrap"></div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDIHNAD3iH96UNcBPg0lnsT0nqqgqJ5xVU",
+            authDomain: "planejamento-financeiro-99ae5.firebaseapp.com",
+            projectId: "planejamento-financeiro-99ae5",
+            storageBucket: "planejamento-financeiro-99ae5.firebasestorage.app",
+            messagingSenderId: "938727158266",
+            appId: "1:938727158266:web:d6cbf174a8c116820d3443"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const googleProvider = new GoogleAuthProvider();
+
+        let transactions = [];
+        let unsubscribe = null;
+        let chartLoc = null, chartTime = null, chartProd = null;
+        let lastProductQuery = '';
+
+        const PALETTE = ['#1e3a8a', '#d97706', '#15803d', '#b91c1c', '#7c3aed', '#0e7490', '#be185d', '#4d7c0f'];
+
+        // ---------- Auth ----------
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                document.getElementById('loginBlock').style.display = 'none';
+                document.getElementById('mainDashboard').style.display = 'block';
+                setDefaultPeriod();
+                if (!unsubscribe) {
+                    unsubscribe = onSnapshot(collection(db, "transactions"), (snapshot) => {
+                        transactions = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                        renderAll();
+                        if (lastProductQuery) searchProduct(true);
+                    });
+                }
+            } else {
+                document.getElementById('loginBlock').style.display = 'block';
+                document.getElementById('mainDashboard').style.display = 'none';
+                if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+                transactions = [];
+            }
+        });
+
+        window.handleLogin = async function(e) {
+            e.preventDefault();
+            try {
+                await signInWithEmailAndPassword(auth, document.getElementById('loginEmail').value, document.getElementById('loginPassword').value);
+            } catch (err) { alert('Falha no login: ' + err.message); }
+        }
+
+        window.handleGoogleLogin = async function() {
+            try { await signInWithPopup(auth, googleProvider); }
+            catch (err) { alert('Falha no login Google: ' + err.message); }
+        }
+
+        // ---------- Helpers ----------
+        function formatCurrency(val) {
+            return (val ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        }
+        function normalize(str) {
+            return String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+        }
+        function monthKey(dateStr) { return String(dateStr || '').slice(0, 7); }
+        function monthLabel(key) {
+            const [y, m] = key.split('-').map(Number);
+            return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+        }
+        function setDefaultPeriod() {
+            const now = new Date();
+            const to = now.toISOString().slice(0, 7);
+            const fromDate = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+            const from = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}`;
+            if (!document.getElementById('periodFrom').value) document.getElementById('periodFrom').value = from;
+            if (!document.getElementById('periodTo').value) document.getElementById('periodTo').value = to;
+        }
+        function locationOf(t) {
+            return (t.location || '').trim() || 'Sem local';
+        }
+        function filteredExpenses() {
+            const from = document.getElementById('periodFrom').value || '0000-00';
+            const to = document.getElementById('periodTo').value || '9999-99';
+            const origin = document.getElementById('originFilter').value;
+            return transactions.filter(t => {
+                if (t.type !== 'gasto_cc' && t.type !== 'gasto_cartao') return false;
+                if (origin !== 'todos' && t.type !== origin) return false;
+                const mk = monthKey(t.date);
+                return mk >= from && mk <= to;
+            });
+        }
+        // Extrai quantidade e preço unitário de descrições como "(3x R$10,00)"
+        function unitInfo(t) {
+            const desc = String(t.description || '');
+            const m = desc.match(/(\d+)\s*x\s*R?\$?\s*(\d+(?:[.,]\d{1,2})?)/i);
+            if (m) {
+                const qty = parseInt(m[1], 10);
+                const unit = parseFloat(m[2].replace(',', '.'));
+                if (qty > 0 && !isNaN(unit)) return { qty, unit, derived: true };
+            }
+            return { qty: 1, unit: t.amount, derived: false };
+        }
+        function monthsBetween(from, to) {
+            const out = [];
+            let [y, m] = from.split('-').map(Number);
+            const [ty, tm] = to.split('-').map(Number);
+            while (y < ty || (y === ty && m <= tm)) {
+                out.push(`${y}-${String(m).padStart(2, '0')}`);
+                m++; if (m > 12) { m = 1; y++; }
+                if (out.length > 60) break; // trava de segurança
+            }
+            return out;
+        }
+        function destroyChart(c) { if (c) c.destroy(); return null; }
+
+        // ---------- Gráfico 1: Gastos por Estabelecimento ----------
+        function renderByLocation(items) {
+            const canvas = document.getElementById('chartByLocation');
+            const msg = document.getElementById('msgByLocation');
+            chartLoc = destroyChart(chartLoc);
+
+            const totals = {};
+            items.forEach(t => { totals[locationOf(t)] = (totals[locationOf(t)] || 0) + t.amount; });
+            const rows = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+
+            if (rows.length === 0) {
+                canvas.style.display = 'none';
+                msg.style.display = 'block';
+                msg.textContent = 'Nenhum gasto encontrado no período selecionado.';
+                return;
+            }
+            canvas.style.display = 'block';
+            msg.style.display = 'none';
+
+            chartLoc = new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels: rows.map(r => r[0]),
+                    datasets: [{
+                        label: 'Total gasto (R$)',
+                        data: rows.map(r => r[1]),
+                        backgroundColor: rows.map((_, i) => PALETTE[i % PALETTE.length])
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { label: ctx => formatCurrency(ctx.parsed.y) } }
+                    },
+                    scales: { y: { ticks: { callback: v => 'R$ ' + v } } }
+                }
+            });
+        }
+
+        // ---------- Gráfico 2: Linha do Tempo ----------
+        function renderTimeline(items) {
+            const canvas = document.getElementById('chartTimeline');
+            const msg = document.getElementById('msgTimeline');
+            chartTime = destroyChart(chartTime);
+
+            const from = document.getElementById('periodFrom').value;
+            const to = document.getElementById('periodTo').value;
+            if (!from || !to || items.length === 0) {
+                canvas.style.display = 'none';
+                msg.style.display = 'block';
+                msg.textContent = 'Nenhum gasto encontrado no período selecionado.';
+                return;
+            }
+            canvas.style.display = 'block';
+            msg.style.display = 'none';
+
+            const months = monthsBetween(from, to);
+            const totalsByLoc = {};
+            items.forEach(t => { totalsByLoc[locationOf(t)] = (totalsByLoc[locationOf(t)] || 0) + t.amount; });
+            const topLocs = Object.entries(totalsByLoc).sort((a, b) => b[1] - a[1]).slice(0, 5).map(r => r[0]);
+
+            const datasets = topLocs.map((loc, i) => {
+                const perMonth = months.map(mk =>
+                    items.filter(t => locationOf(t) === loc && monthKey(t.date) === mk)
+                         .reduce((s, t) => s + t.amount, 0)
+                );
+                return {
+                    label: loc,
+                    data: perMonth,
+                    borderColor: PALETTE[i % PALETTE.length],
+                    backgroundColor: PALETTE[i % PALETTE.length],
+                    tension: 0.25,
+                    spanGaps: true
+                };
+            });
+
+            const totalPerMonth = months.map(mk =>
+                items.filter(t => monthKey(t.date) === mk).reduce((s, t) => s + t.amount, 0)
+            );
+            datasets.push({
+                label: 'Total geral',
+                data: totalPerMonth,
+                borderColor: '#94a3b8',
+                borderDash: [6, 4],
+                pointRadius: 2,
+                tension: 0.25
+            });
+
+            chartTime = new Chart(canvas, {
+                type: 'line',
+                data: { labels: months.map(monthLabel), datasets },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}` } }
+                    },
+                    scales: { y: { ticks: { callback: v => 'R$ ' + v } } }
+                }
+            });
+        }
+
+        // ---------- Gráfico 3: Comparador de Preço de Produto ----------
+        window.searchProduct = function(silent) {
+            const queryRaw = document.getElementById('productSearch').value.trim();
+            const canvas = document.getElementById('chartProduct');
+            const msg = document.getElementById('msgProduct');
+            const tableWrap = document.getElementById('productTableWrap');
+            chartProd = destroyChart(chartProd);
+            tableWrap.innerHTML = '';
+
+            if (!queryRaw) {
+                if (!silent) alert('Digite o nome de um produto para comparar.');
+                canvas.style.display = 'none';
+                msg.style.display = 'block';
+                msg.textContent = 'Digite o nome de um produto acima para comparar preços entre estabelecimentos e ao longo do tempo.';
+                lastProductQuery = '';
+                return;
+            }
+            lastProductQuery = queryRaw;
+            const query = normalize(queryRaw);
+
+            // Busca em TODO o histórico de gastos (ignora filtro de período para dar visão completa)
+            const origin = document.getElementById('originFilter').value;
+            const matches = transactions.filter(t => {
+                if (t.type !== 'gasto_cc' && t.type !== 'gasto_cartao') return false;
+                if (origin !== 'todos' && t.type !== origin) return false;
+                return normalize(t.description).includes(query);
+            }).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+            if (matches.length === 0) {
+                canvas.style.display = 'none';
+                msg.style.display = 'block';
+                msg.textContent = `Nenhum registro encontrado para "${queryRaw}".`;
+                return;
+            }
+            canvas.style.display = 'block';
+            msg.style.display = 'none';
+
+            // Uma série por estabelecimento; pontos = preço unitário no tempo
+            const byLoc = {};
+            matches.forEach(t => {
+                const loc = locationOf(t);
+                if (!byLoc[loc]) byLoc[loc] = [];
+                const u = unitInfo(t);
+                byLoc[loc].push({ x: t.date.slice(0, 10), y: u.unit, t, u });
+            });
+
+            const datasets = Object.entries(byLoc).map(([loc, pts], i) => ({
+                label: loc,
+                data: pts.map(p => ({ x: p.x, y: p.y })),
+                borderColor: PALETTE[i % PALETTE.length],
+                backgroundColor: PALETTE[i % PALETTE.length],
+                tension: 0.2,
+                pointRadius: 5
+            }));
+
+            const allDates = [...new Set(matches.map(t => t.date.slice(0, 10)))].sort();
+
+            chartProd = new Chart(canvas, {
+                type: 'line',
+                data: { labels: allDates, datasets },
+                options: {
+                    responsive: true,
+                    parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+                    plugins: {
+                        title: { display: true, text: `Preço de "${queryRaw}" ao longo do tempo (por estabelecimento)` },
+                        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}` } }
+                    },
+                    scales: {
+                        x: { type: 'category', labels: allDates, ticks: { callback: (v, i) => { const d = allDates[i]; return d ? d.split('-').reverse().slice(0, 2).join('/') : ''; } } },
+                        y: { ticks: { callback: v => 'R$ ' + v } }
+                    }
+                }
+            });
+
+            // Tabela de compras encontradas, destacando o menor preço unitário
+            const minUnit = Math.min(...matches.map(t => unitInfo(t).unit));
+            let html = '<table class="matches"><thead><tr><th>Data</th><th>Estabelecimento</th><th>Descrição</th><th>Qtd.</th><th>Preço unit.</th><th>Total pago</th></tr></thead><tbody>';
+            [...matches].reverse().forEach(t => {
+                const u = unitInfo(t);
+                const d = new Date(t.date);
+                const isBest = Math.abs(u.unit - minUnit) < 0.005;
+                html += `<tr>
+                    <td>${d.toLocaleDateString('pt-BR')}</td>
+                    <td>${escapeHtml(locationOf(t))}</td>
+                    <td>${escapeHtml(t.description || 'Sem descrição')}</td>
+                    <td>${u.qty}${u.derived ? '' : '*'}</td>
+                    <td class="${isBest ? 'best-price' : ''}">${formatCurrency(u.unit)}${isBest ? ' 🏆' : ''}</td>
+                    <td>${formatCurrency(t.amount)}</td>
+                </tr>`;
+            });
+            html += '</tbody></table><p class="hint">* Quantidade não identificada na descrição; considerado 1 unidade (preço unitário = valor do registro). 🏆 = menor preço unitário encontrado.</p>';
+            tableWrap.innerHTML = html;
+        }
+
+        function escapeHtml(str) {
+            return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        window.renderAll = function() {
+            const items = filteredExpenses();
+            renderByLocation(items);
+            renderTimeline(items);
+        }
+    </script>
+</body>
+</html>
