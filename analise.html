@@ -195,6 +195,18 @@
         @media (prefers-reduced-motion: reduce) {
             * { transition: none !important; animation: none !important; }
         }
+
+        /* ===== LAYOUT ULTRAWIDE ===== */
+        @media (min-width: 1720px) {
+            .wrapper { max-width: 1680px; }
+            .charts-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 35px;
+                align-items: start;
+            }
+            .charts-grid > div { min-width: 0; }
+        }
     </style>
 </head>
 <body>
@@ -242,19 +254,25 @@
             </div>
         </div>
 
+        <div class="charts-grid">
+        <div>
         <h2>Gastos por Estabelecimento <span class="subtitle-info">total no período selecionado</span></h2>
         <div class="chart-box">
             <canvas id="chartByLocation" height="130"></canvas>
             <div class="no-data-msg" id="msgByLocation" style="display:none;"></div>
         </div>
         <p class="hint">Registros sem local informado são agrupados em "Sem local". Preencha o campo Local da Compra para enriquecer esta análise.</p>
+        </div>
 
+        <div>
         <h2>Linha do Tempo de Gastos <span class="subtitle-info">evolução mensal por estabelecimento</span></h2>
         <div class="chart-box">
             <canvas id="chartTimeline" height="140"></canvas>
             <div class="no-data-msg" id="msgTimeline" style="display:none;"></div>
         </div>
         <p class="hint">Mostra os 5 estabelecimentos com maior gasto no período, além da linha tracejada com o total geral.</p>
+        </div>
+        </div>
 
         <h2>Comparador de Preço de Produto <span class="subtitle-info">acompanhe um item ao longo do tempo</span></h2>
         <div class="search-row">
