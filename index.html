@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Controle Financeiro Integrado</title>
+    <link rel="manifest" href="./manifest.json">
+    <meta name="theme-color" content="#1e3a8a">
+    <link rel="apple-touch-icon" href="./icon-192.png">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <style>
         :root {
             --primary: #1e3a8a;
@@ -489,6 +493,36 @@
             background: var(--primary);
             border-radius: 3px;
         }
+        .cat-bar-fill.meta-ok { background: var(--success); }
+        .cat-bar-fill.meta-warn { background: var(--warning); }
+        .cat-bar-fill.meta-over { background: var(--danger); }
+        .meta-label { font-size: 0.75rem; color: #64748b; display: block; margin-top: 2px; }
+
+        .cat-flex {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            margin-bottom: 25px;
+        }
+        .cat-chart-box {
+            width: 240px;
+            max-width: 100%;
+            margin: 0 auto;
+            flex-shrink: 0;
+        }
+
+        .owner-chip {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: bold;
+            padding: 1px 7px;
+            border-radius: 10px;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .owner-chip.owner-marcelo { background: #dbeafe; color: #1e40af; }
+        .owner-chip.owner-amanda { background: #fce7f3; color: #9d174d; }
 
         /* ===== Arquivo Mensal ===== */
         .archive-table {
@@ -576,6 +610,7 @@
                     <input type="month" id="viewPeriod" style="padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; font-family: Arial, sans-serif; font-size: 0.9rem;" onchange="window.updatePeriodChange()">
                 </div>
                 <a href="analise.html" style="text-decoration: none; font-weight: bold; font-size: 0.85rem; color: var(--primary); border: 1px solid var(--border-color); padding: 7px 12px; border-radius: 4px; background: #fff;">📊 Análise de Preços</a>
+                <button type="button" class="btn-action" style="padding: 7px 12px; font-size: 0.85rem; font-weight: bold;" onclick="exportBackup()">💾 Backup</button>
                 <button class="btn-logout" onclick="handleLogout()">🚪 Sair</button>
             </div>
         </div>
@@ -712,6 +747,15 @@
                     </div>
 
                     <div class="form-field">
+                        <label for="txOwner">Quem gastou / recebeu</label>
+                        <select id="txOwner">
+                            <option value="Conjunta">Conta Conjunta</option>
+                            <option value="Marcelo">Marcelo</option>
+                            <option value="Amanda">Amanda</option>
+                        </select>
+                    </div>
+
+                    <div class="form-field">
                         <label for="txDate">Data e Hora</label>
                         <input type="datetime-local" id="txDate" required>
                     </div>
@@ -740,7 +784,7 @@
                 <p class="import-hint">
                     Aceita um objeto único ou uma lista. Campos: <code>type</code> (entrada, gasto_cc, gasto_cartao),
                     <code>amount</code>, <code>category</code>, <code>date</code> (AAAA-MM-DDTHH:MM), <code>description</code>
-                    e <code>location</code> (opcional — deixe vazio se não souber onde foi a compra).
+                    <code>location</code> (opcional) e <code>owner</code> (opcional: Conjunta, Marcelo ou Amanda).
                 </p>
                 <textarea id="importJsonInput" placeholder='[{"type":"gasto_cc","amount":7.32,"category":"Alimentação / Fast Food","date":"2026-07-05T15:44","description":"Pão francês 0,488kg (Pix)","location":"Bonanza Supermercados"}]'></textarea>
                 <div class="import-error" id="importError"></div>
@@ -779,17 +823,40 @@
             Gastos por Categoria
             <span class="subtitle-info">Mês de referência selecionado</span>
         </h2>
+        <div class="cat-flex">
+            <div class="cat-chart-box">
+                <canvas id="categoryDonut"></canvas>
+            </div>
+            <div class="table-scroll" style="flex: 1;">
+            <table class="category-table">
+                <thead>
+                    <tr>
+                        <th style="width: 28%;">Categoria</th>
+                        <th style="width: 17%;">Total Gasto</th>
+                        <th style="width: 10%;">% do mês</th>
+                        <th style="width: 20%;">Meta Mensal</th>
+                        <th>Progresso</th>
+                    </tr>
+                </thead>
+                <tbody id="categoryBody">
+                    <tr><td colspan="5" class="no-data">Sem gastos registrados neste mês.</td></tr>
+                </tbody>
+            </table>
+            </div>
+        </div>
+
+        <h2>Gastos por Pessoa <span class="subtitle-info">mês de referência selecionado</span></h2>
         <div class="table-scroll">
         <table class="category-table">
             <thead>
                 <tr>
-                    <th style="width: 35%;">Categoria</th>
+                    <th style="width: 35%;">Pessoa</th>
                     <th style="width: 20%;">Total Gasto</th>
                     <th style="width: 12%;">% do mês</th>
                     <th>Proporção</th>
                 </tr>
             </thead>
-            <tbody id="categoryBody">
+            <tbody id="ownerBody">
                 <tr><td colspan="4" class="no-data">Sem gastos registrados neste mês.</td></tr>
             </tbody>
         </table>
@@ -870,6 +937,8 @@
         let creditLimitTotal = 1238.48;
         let lastComputedBalances = { currentCC: 0, projectedCC: 0 };
         let planningSettings = { target_date: null, base_mode: 'saldo_atual', manual_value: 0 };
+        let categoryBudgets = {};
+        let donutChart = null;
         let suppressPlanningSave = false;
         let expandedArchiveMonths = new Set();
 
@@ -941,6 +1010,12 @@
                 fixedExpenses = [];
                 snapshot.forEach((d) => fixedExpenses.push({ id: d.id, ...d.data() }));
                 renderFixedExpenses();
+            });
+
+            // Metas de gasto por categoria (sincronizadas na nuvem)
+            onSnapshot(doc(db, "app_settings", "budgets"), (docSnap) => {
+                categoryBudgets = docSnap.exists() ? (docSnap.data().values || {}) : {};
+                recalculateAndRender();
             });
 
             // Configuração do painel de planejamento (sincroniza entre os aparelhos da família)
@@ -1452,7 +1527,7 @@
 
                 tr.innerHTML = `
                     <td>${dateDisplay}</td>
-                    <td>${escapeHtml(t.description || 'Sem descrição')}${t.location ? `<span class="tx-location">📍 ${escapeHtml(t.location)}</span>` : ''}</td>
+                    <td>${escapeHtml(t.description || 'Sem descrição')}${t.owner && t.owner !== 'Conjunta' ? `<span class="owner-chip owner-${t.owner.toLowerCase()}">${escapeHtml(t.owner)}</span>` : ''}${t.location ? `<span class="tx-location">📍 ${escapeHtml(t.location)}</span>` : ''}</td>
                     <td>${escapeHtml(t.category)}</td>
                     <td>${meta.origin}</td>
                     <td class="${meta.cls}">${meta.sign}${formatCurrency(t.amount)}</td>
@@ -1467,6 +1542,8 @@
         // =====================================================
         // RESUMO POR CATEGORIA (mês de referência selecionado)
         // =====================================================
+        const DONUT_PALETTE = ['#1e3a8a', '#d97706', '#15803d', '#b91c1c', '#7c3aed', '#0e7490', '#be185d', '#4d7c0f', '#64748b'];
+
         function renderCategorySummary(selYear, selMonth) {
             const tbody = document.getElementById('categoryBody');
             const totals = {};
@@ -1481,33 +1558,159 @@
                 grandTotal += t.amount;
             });
 
+            renderOwnerSummary(selYear, selMonth, grandTotal);
+
+            // Gráfico de rosca
+            if (donutChart) { donutChart.destroy(); donutChart = null; }
+            const donutCanvas = document.getElementById('categoryDonut');
+            const rows = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+
             if (grandTotal === 0) {
-                tbody.innerHTML = `<tr><td colspan="4" class="no-data">Sem gastos registrados neste mês.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="5" class="no-data">Sem gastos registrados neste mês.</td></tr>`;
+                donutCanvas.style.display = 'none';
                 return;
             }
+            donutCanvas.style.display = 'block';
 
-            const rows = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+            if (typeof Chart !== 'undefined') {
+                donutChart = new Chart(donutCanvas, {
+                    type: 'doughnut',
+                    data: {
+                        labels: rows.map(r => r[0]),
+                        datasets: [{
+                            data: rows.map(r => r[1]),
+                            backgroundColor: rows.map((_, i) => DONUT_PALETTE[i % DONUT_PALETTE.length]),
+                            borderWidth: 2,
+                            borderColor: '#ffffff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        cutout: '58%',
+                        plugins: {
+                            legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+                            tooltip: { callbacks: { label: ctx => `${ctx.label}: ${formatCurrency(ctx.parsed)} (${((ctx.parsed / grandTotal) * 100).toFixed(1)}%)` } }
+                        }
+                    }
+                });
+            }
+
             tbody.innerHTML = '';
             rows.forEach(([cat, val]) => {
                 const pct = (val / grandTotal) * 100;
+                const meta = categoryBudgets[cat];
+                let metaCell, barHtml;
+
+                if (meta && meta > 0) {
+                    const metaPct = (val / meta) * 100;
+                    const cls = metaPct > 100 ? 'meta-over' : (metaPct >= 80 ? 'meta-warn' : 'meta-ok');
+                    const status = metaPct > 100
+                        ? `Estourou em ${formatCurrency(val - meta)}`
+                        : `${metaPct.toFixed(0)}% da meta · resta ${formatCurrency(meta - val)}`;
+                    metaCell = `${formatCurrency(meta)} <button class="btn-action" onclick="editarMeta('${cat.replace(/'/g, "\\'")}')" title="Editar meta">✏️</button>`;
+                    barHtml = `<div class="cat-bar-track"><div class="cat-bar-fill ${cls}" style="width:${Math.min(100, metaPct).toFixed(1)}%"></div></div><span class="meta-label">${status}</span>`;
+                } else {
+                    metaCell = `<button class="btn-action" onclick="editarMeta('${cat.replace(/'/g, "\\'")}')" title="Definir meta">＋ Definir</button>`;
+                    barHtml = `<div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>`;
+                }
+
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td>${escapeHtml(cat)}</td>
                     <td class="text-out">- ${formatCurrency(val)}</td>
                     <td>${pct.toFixed(1)}%</td>
-                    <td><div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct.toFixed(1)}%"></div></div></td>
+                    <td>${metaCell}</td>
+                    <td>${barHtml}</td>
                 `;
                 tbody.appendChild(tr);
             });
 
             const totalRow = document.createElement('tr');
             totalRow.className = 'total-row';
+            const totalMeta = Object.values(categoryBudgets).reduce((s, v) => s + (v > 0 ? v : 0), 0);
             totalRow.innerHTML = `
                 <td style="text-align: right; text-transform: uppercase;">Total de gastos no mês:</td>
                 <td class="text-out">- ${formatCurrency(grandTotal)}</td>
-                <td colspan="2"></td>
+                <td></td>
+                <td>${totalMeta > 0 ? formatCurrency(totalMeta) : ''}</td>
+                <td>${totalMeta > 0 ? `<span class="meta-label" style="font-weight:bold;">${((grandTotal / totalMeta) * 100).toFixed(0)}% do orçamento total</span>` : ''}</td>
             `;
             tbody.appendChild(totalRow);
+        }
+
+        // =====================================================
+        // BACKUP COMPLETO EM JSON
+        // =====================================================
+        window.exportBackup = function() {
+            if (!transactions.length && !fixedExpenses.length) {
+                return alert('Ainda não há dados para exportar.');
+            }
+            const backup = {
+                app: 'Controle Financeiro Integrado',
+                exported_at: new Date().toISOString(),
+                transactions: transactions,
+                fixed_expenses: fixedExpenses,
+                settings: {
+                    credit_card_limit: creditLimitTotal,
+                    planning: planningSettings,
+                    category_budgets: categoryBudgets
+                }
+            };
+            const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const stamp = new Date().toISOString().slice(0, 10);
+            a.href = url;
+            a.download = `backup-controle-financeiro-${stamp}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        window.editarMeta = async function(cat) {
+            const atual = categoryBudgets[cat] || '';
+            const input = prompt(`Meta mensal para "${cat}" (R$):\n(Deixe vazio ou 0 para remover a meta)`, atual);
+            if (input === null) return;
+            const valor = parseFloat(String(input).replace(',', '.'));
+            const novos = { ...categoryBudgets };
+            if (isNaN(valor) || valor <= 0) delete novos[cat];
+            else novos[cat] = valor;
+            try {
+                await setDoc(doc(db, "app_settings", "budgets"), { values: novos });
+            } catch (e) { alert('Erro ao salvar meta: ' + e.message); }
+        }
+
+        function renderOwnerSummary(selYear, selMonth, grandTotal) {
+            const tbody = document.getElementById('ownerBody');
+            const totals = { 'Conjunta': 0, 'Marcelo': 0, 'Amanda': 0 };
+
+            transactions.forEach(t => {
+                if (t.type !== 'gasto_cc' && t.type !== 'gasto_cartao') return;
+                const tDate = new Date(t.date);
+                if (tDate.getMonth() !== selMonth || tDate.getFullYear() !== selYear) return;
+                const owner = totals.hasOwnProperty(t.owner) ? t.owner : 'Conjunta';
+                totals[owner] += t.amount;
+            });
+
+            if (grandTotal === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" class="no-data">Sem gastos registrados neste mês.</td></tr>`;
+                return;
+            }
+
+            const labels = { 'Conjunta': 'Conta Conjunta', 'Marcelo': 'Marcelo', 'Amanda': 'Amanda' };
+            tbody.innerHTML = '';
+            Object.entries(totals).forEach(([owner, val]) => {
+                const pct = grandTotal > 0 ? (val / grandTotal) * 100 : 0;
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${labels[owner]}</td>
+                    <td class="text-out">- ${formatCurrency(val)}</td>
+                    <td>${pct.toFixed(1)}%</td>
+                    <td><div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct.toFixed(1)}%"></div></div></td>
+                `;
+                tbody.appendChild(tr);
+            });
         }
 
         // =====================================================
@@ -1619,7 +1822,7 @@
             if (!g) return;
 
             const csvEscape = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
-            const lines = ['Data;Descricao;Local;Categoria;Tipo;Valor'];
+            const lines = ['Data;Descricao;Local;Pessoa;Categoria;Tipo;Valor'];
             const sorted = [...g.items].sort((a, b) => new Date(a.date) - new Date(b.date));
             sorted.forEach(t => {
                 const meta = txDisplayMeta(t, false);
@@ -1628,15 +1831,16 @@
                     csvEscape(formatDate(t.date)),
                     csvEscape(t.description || 'Sem descrição'),
                     csvEscape(t.location || ''),
+                    csvEscape(t.owner || 'Conjunta'),
                     csvEscape(t.category),
                     csvEscape(meta.origin),
                     csvEscape(signedValue)
                 ].join(';'));
             });
             lines.push('');
-            lines.push([csvEscape('TOTAL ENTRADAS'), '', '', '', '', csvEscape(g.entradas.toFixed(2).replace('.', ','))].join(';'));
-            lines.push([csvEscape('TOTAL SAIDAS'), '', '', '', '', csvEscape(('-' + g.saidas.toFixed(2)).replace('.', ','))].join(';'));
-            lines.push([csvEscape('RESULTADO'), '', '', '', '', csvEscape((g.entradas - g.saidas).toFixed(2).replace('.', ','))].join(';'));
+            lines.push([csvEscape('TOTAL ENTRADAS'), '', '', '', '', '', csvEscape(g.entradas.toFixed(2).replace('.', ','))].join(';'));
+            lines.push([csvEscape('TOTAL SAIDAS'), '', '', '', '', '', csvEscape(('-' + g.saidas.toFixed(2)).replace('.', ','))].join(';'));
+            lines.push([csvEscape('RESULTADO'), '', '', '', '', '', csvEscape((g.entradas - g.saidas).toFixed(2).replace('.', ','))].join(';'));
 
             const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
             const a = document.createElement('a');
@@ -1657,10 +1861,11 @@
             const date = document.getElementById('txDate').value;
             const description = document.getElementById('txDescription').value;
             const location = document.getElementById('txLocation').value.trim();
+            const owner = document.getElementById('txOwner').value || 'Conjunta';
 
             if (isNaN(amount) || amount <= 0) return alert("Informe um valor válido maior que zero.");
 
-            await addDoc(collection(db, "transactions"), { type, amount, category, date, description, location });
+            await addDoc(collection(db, "transactions"), { type, amount, category, date, description, location, owner });
 
             document.getElementById('txAmount').value = '';
             document.getElementById('txDescription').value = '';
@@ -1674,6 +1879,7 @@
             'Alimentação / Fast Food', 'Transporte', 'Assinaturas (IA & Softwares)',
             'Família & Pets', 'Mercado', 'Contas', 'Educação & Esportes', 'Receita / Salário', 'Outros'
         ];
+        const VALID_OWNERS = ['Conjunta', 'Marcelo', 'Amanda'];
         let pendingImport = [];
 
         window.toggleImportPanel = function() {
@@ -1700,7 +1906,8 @@
                 category: String(item.category || 'Outros').trim(),
                 date: String(item.date || '').trim(),
                 description: String(item.description || '').trim(),
-                location: String(item.location || '').trim()
+                location: String(item.location || '').trim(),
+                owner: VALID_OWNERS.includes(String(item.owner || '').trim()) ? String(item.owner).trim() : 'Conjunta'
             };
             if (!VALID_TYPES.includes(tx.type)) errors.push(`Item ${idx + 1}: tipo "${tx.type}" inválido (use: ${VALID_TYPES.join(', ')}).`);
             if (isNaN(tx.amount) || tx.amount <= 0) errors.push(`Item ${idx + 1}: valor inválido.`);
@@ -1805,6 +2012,14 @@
 
         applyPlanningSettingsToUI();
         setDefaultDateTime();
+    </script>
+    <script>
+        // PWA: registra o service worker (caminho relativo por causa do subdiretório do GitHub Pages)
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').catch(() => {});
+            });
+        }
     </script>
 </body>
 </html>
