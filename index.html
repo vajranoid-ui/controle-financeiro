@@ -524,6 +524,47 @@
         .owner-chip.owner-marcelo { background: #dbeafe; color: #1e40af; }
         .owner-chip.owner-amanda { background: #fce7f3; color: #9d174d; }
 
+        /* ===== Livro Caixa (Educandário Veritas) ===== */
+        .livro-caixa-box {
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: #fffbeb;
+            border: 1px dashed #fbbf24;
+            border-radius: 4px;
+            font-size: 0.83rem;
+            font-weight: normal;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .lc-check {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            color: #92400e;
+        }
+        .lc-check input { width: 16px; height: 16px; cursor: pointer; }
+        .lc-field { display: flex; align-items: center; gap: 4px; color: #92400e; font-weight: bold; }
+        .lc-field input {
+            width: 110px;
+            padding: 5px 7px;
+            border: 1px solid #fbbf24;
+            border-radius: 4px;
+            font-size: 0.88rem;
+        }
+        .lc-breakdown {
+            width: 100%;
+            padding-top: 6px;
+            border-top: 1px dashed #fbbf24;
+            display: flex;
+            gap: 18px;
+            flex-wrap: wrap;
+        }
+        .lc-breakdown strong { font-size: 0.95rem; }
+
         /* ===== Arquivo Mensal ===== */
         .archive-table {
             width: 100%;
@@ -630,6 +671,16 @@
                     <div class="projected-box" title="Inclui salários agendados e contas futuras">
                         ↳ Agendado no Mês: <strong id="ccFuture" class="text-future" style="margin: 0 8px;">R$ 0,00</strong> |
                         Projetado Final: <strong id="ccProjected" style="margin-left: 8px;">R$ 0,00</strong>
+                    </div>
+                    <div class="livro-caixa-box">
+                        <label class="lc-check">
+                            <input type="checkbox" id="lcAtivo" onchange="salvarLivroCaixa()">
+                            Descontar Livro Caixa (Educandário Veritas)
+                        </label>
+                        <span class="lc-field">
+                            R$ <input type="number" id="lcValor" step="0.01" min="0" placeholder="0,00" onchange="salvarLivroCaixa()">
+                        </span>
+                        <div id="lcBreakdown" class="lc-breakdown" style="display:none;"></div>
                     </div>
                 </td>
             </tr>
@@ -940,6 +991,7 @@
         let planningSettings = { target_date: null, base_mode: 'saldo_atual', manual_value: 0 };
         let categoryBudgets = {};
         let donutChart = null;
+        let livroCaixa = { valor: 0, ativo: false };
         let suppressPlanningSave = false;
         let expandedArchiveMonths = new Set();
 
@@ -1016,6 +1068,18 @@
             // Metas de gasto por categoria (sincronizadas na nuvem)
             onSnapshot(doc(db, "app_settings", "budgets"), (docSnap) => {
                 categoryBudgets = docSnap.exists() ? (docSnap.data().values || {}) : {};
+                recalculateAndRender();
+            });
+
+            // Livro Caixa do Educandário Veritas (sincronizado na nuvem)
+            onSnapshot(doc(db, "app_settings", "livro_caixa"), (docSnap) => {
+                livroCaixa = docSnap.exists()
+                    ? { valor: docSnap.data().valor || 0, ativo: !!docSnap.data().ativo }
+                    : { valor: 0, ativo: false };
+                const lcValorEl = document.getElementById('lcValor');
+                const lcAtivoEl = document.getElementById('lcAtivo');
+                if (document.activeElement !== lcValorEl) lcValorEl.value = livroCaixa.valor || '';
+                lcAtivoEl.checked = livroCaixa.ativo;
                 recalculateAndRender();
             });
 
@@ -1479,6 +1543,20 @@
             ccEl.textContent = formatCurrency(currentCC);
             ccEl.className = currentCC < 0 ? 'text-out main-balance' : 'text-in main-balance';
 
+            // Livro Caixa: desdobramento do saldo (dinheiro próprio × valor da escola)
+            const lcBreak = document.getElementById('lcBreakdown');
+            if (livroCaixa.ativo && livroCaixa.valor > 0) {
+                const meuDinheiro = currentCC - livroCaixa.valor;
+                lcBreak.style.display = 'flex';
+                lcBreak.innerHTML = `
+                    <span>📒 Livro Caixa: <strong style="color:#92400e;">${formatCurrency(livroCaixa.valor)}</strong></span>
+                    <span>💰 Dinheiro próprio: <strong class="${meuDinheiro < 0 ? 'text-out' : 'text-in'}">${formatCurrency(meuDinheiro)}</strong></span>
+                `;
+            } else {
+                lcBreak.style.display = 'none';
+                lcBreak.innerHTML = '';
+            }
+
             const futureEl = document.getElementById('ccFuture');
             futureEl.textContent = (futureCC >= 0 ? '+' : '') + formatCurrency(futureCC);
             futureEl.style.color = futureCC >= 0 ? 'var(--success)' : 'var(--danger)';
@@ -1640,6 +1718,17 @@
         }
 
         // =====================================================
+        // LIVRO CAIXA — EDUCANDÁRIO VERITAS
+        // =====================================================
+        window.salvarLivroCaixa = async function() {
+            const valor = parseFloat(document.getElementById('lcValor').value) || 0;
+            const ativo = document.getElementById('lcAtivo').checked;
+            try {
+                await setDoc(doc(db, "app_settings", "livro_caixa"), { valor, ativo });
+            } catch (e) { alert('Erro ao salvar Livro Caixa: ' + e.message); }
+        }
+
+        // =====================================================
         // BACKUP COMPLETO EM JSON
         // =====================================================
         window.exportBackup = function() {
@@ -1654,7 +1743,8 @@
                 settings: {
                     credit_card_limit: creditLimitTotal,
                     planning: planningSettings,
-                    category_budgets: categoryBudgets
+                    category_budgets: categoryBudgets,
+                    livro_caixa: livroCaixa
                 }
             };
             const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
