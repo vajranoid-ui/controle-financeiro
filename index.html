@@ -1214,9 +1214,19 @@
                 default: baseValue = lastComputedBalances.currentCC;
             }
 
+            // Livro Caixa ativo: desconta o valor da escola (dinheiro que não é gastável)
+            const descontoLC = (livroCaixa.ativo && livroCaixa.valor > 0 && planningSettings.base_mode !== 'manual')
+                ? livroCaixa.valor : 0;
+            baseValue -= descontoLC;
+
             const result = calcPlanning(baseValue, targetDateStr, now);
 
-            document.getElementById('planBaseDisplay').textContent = formatCurrency(baseValue);
+            const baseDisplayEl = document.getElementById('planBaseDisplay');
+            baseDisplayEl.innerHTML = formatCurrency(baseValue) + (descontoLC > 0
+                ? ` <span style="display:block; font-size:0.68rem; font-weight:normal; color:#92400e;">📒 já descontado o Livro Caixa (${formatCurrency(descontoLC)})</span>`
+                : '');
+            baseDisplayEl.title = descontoLC > 0
+                ? `Saldo da conta menos Livro Caixa (${formatCurrency(descontoLC)})` : '';
             document.getElementById('planDaysDisplay').textContent =
                 result.days > 0 ? `${result.days} dia${result.days > 1 ? 's' : ''}` : 'Data já passou';
             document.getElementById('planDailyDisplay').textContent = formatCurrency(result.daily);
