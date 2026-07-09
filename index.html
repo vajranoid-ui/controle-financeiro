@@ -1623,8 +1623,8 @@
                     <td>${dateDisplay}</td>
                     <td>${escapeHtml(t.description || 'Sem descrição')}${t.owner && t.owner !== 'Conjunta' ? `<span class="owner-chip owner-${t.owner.toLowerCase()}">${escapeHtml(t.owner)}</span>` : ''}${t.location ? `<span class="tx-location">📍 ${escapeHtml(t.location)}</span>` : ''}</td>
                     <td class="cat-editable" onclick="editarCategoriaTx('${t.id}', this)" title="Toque para alterar a categoria">${escapeHtml(t.category)} <span class="cat-edit-icon">✏️</span></td>
-                    <td>${meta.origin}</td>
-                    <td class="${meta.cls}">${meta.sign}${formatCurrency(t.amount)}</td>
+                    <td class="cat-editable" onclick="editarTipoTx('${t.id}', this)" title="Toque para alterar o tipo (entrada/gasto)">${meta.origin} <span class="cat-edit-icon">✏️</span></td>
+                    <td class="${meta.cls} cat-editable" onclick="editarValorTx('${t.id}', this)" title="Toque para alterar o valor">${meta.sign}${formatCurrency(t.amount)} <span class="cat-edit-icon">✏️</span></td>
                     <td style="text-align: center;">
                         <button type="button" class="btn-delete" onclick="deleteTransaction('${t.id}')" title="Excluir">🗑️</button>
                     </td>
@@ -1773,6 +1773,105 @@
                     // O onSnapshot re-renderiza o extrato automaticamente com a nova categoria
                 } catch (e) {
                     alert('Erro ao alterar categoria: ' + e.message);
+                    restaurar();
+                }
+            };
+            select.onblur = () => { if (!select.disabled) restaurar(); };
+
+            cell.innerHTML = '';
+            cell.appendChild(select);
+            select.focus();
+        }
+
+        // =====================================================
+        // EDIÇÃO DE VALOR DIRETO NO EXTRATO
+        // =====================================================
+        window.editarValorTx = function(id, cell) {
+            if (cell.querySelector('input')) return;
+            const tx = transactions.find(t => t.id === id);
+            if (!tx) return;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = '0.01';
+            input.min = '0.01';
+            input.value = tx.amount.toFixed(2);
+            input.style.cssText = 'width:110px; padding:6px; border:1px solid var(--primary); border-radius:4px; font-size:0.85rem;';
+
+            const meta = txDisplayMeta(tx, new Date(tx.date) > new Date());
+            const restaurar = () => {
+                cell.innerHTML = `${meta.sign}${formatCurrency(tx.amount)} <span class="cat-edit-icon">✏️</span>`;
+            };
+
+            const salvar = async () => {
+                const novo = parseFloat(input.value);
+                if (isNaN(novo) || novo <= 0) { alert('Informe um valor válido maior que zero.'); return restaurar(); }
+                if (Math.abs(novo - tx.amount) < 0.005) return restaurar();
+                input.disabled = true;
+                try {
+                    await updateDoc(doc(db, "transactions", id), { amount: novo });
+                } catch (e) {
+                    alert('Erro ao alterar valor: ' + e.message);
+                    restaurar();
+                }
+            };
+
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); salvar(); }
+                if (e.key === 'Escape') restaurar();
+            };
+            input.onblur = () => { if (!input.disabled) salvar(); };
+
+            cell.innerHTML = '';
+            cell.appendChild(input);
+            input.focus();
+            input.select();
+        }
+
+        // =====================================================
+        // EDIÇÃO DE TIPO (entrada/gasto) DIRETO NO EXTRATO
+        // =====================================================
+        const EDITABLE_TYPES = {
+            'entrada': '💰 Entrada (soma na conta)',
+            'gasto_cc': '💸 Gasto — Débito/Conta Corrente',
+            'gasto_cartao': '💳 Gasto — Cartão de Crédito'
+        };
+
+        window.editarTipoTx = function(id, cell) {
+            if (cell.querySelector('select')) return;
+            const tx = transactions.find(t => t.id === id);
+            if (!tx) return;
+
+            const meta = txDisplayMeta(tx, new Date(tx.date) > new Date());
+            const restaurar = () => {
+                cell.innerHTML = `${meta.origin} <span class="cat-edit-icon">✏️</span>`;
+            };
+
+            // Ajustes e pagamentos de fatura têm lógica interna própria — não são editáveis
+            if (!EDITABLE_TYPES[tx.type]) {
+                alert('Este registro é um ajuste ou pagamento de fatura e não pode ter o tipo alterado.\nSe precisar corrigi-lo, exclua e lance novamente.');
+                return;
+            }
+
+            const select = document.createElement('select');
+            select.style.cssText = 'width:100%; padding:6px; border:1px solid var(--primary); border-radius:4px; font-size:0.82rem;';
+            Object.entries(EDITABLE_TYPES).forEach(([val, label]) => {
+                const opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = label;
+                if (val === tx.type) opt.selected = true;
+                select.appendChild(opt);
+            });
+
+            select.onchange = async () => {
+                const novo = select.value;
+                if (novo === tx.type) return restaurar();
+                select.disabled = true;
+                try {
+                    await updateDoc(doc(db, "transactions", id), { type: novo });
+                    // Saldo, fatura e projeções recalculam automaticamente via onSnapshot
+                } catch (e) {
+                    alert('Erro ao alterar tipo: ' + e.message);
                     restaurar();
                 }
             };
