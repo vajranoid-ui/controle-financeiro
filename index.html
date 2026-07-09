@@ -565,6 +565,11 @@
         }
         .lc-breakdown strong { font-size: 0.95rem; }
 
+        /* Categoria editável no extrato */
+        .cat-editable { cursor: pointer; }
+        .cat-editable:hover { background-color: var(--primary-soft); }
+        .cat-edit-icon { font-size: 0.7rem; opacity: 0.45; }
+
         /* ===== Arquivo Mensal ===== */
         .archive-table {
             width: 100%;
@@ -964,7 +969,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
 
         // ==========================================
         // Configurações Reais do Seu Projeto Firebase
@@ -1617,7 +1622,7 @@
                 tr.innerHTML = `
                     <td>${dateDisplay}</td>
                     <td>${escapeHtml(t.description || 'Sem descrição')}${t.owner && t.owner !== 'Conjunta' ? `<span class="owner-chip owner-${t.owner.toLowerCase()}">${escapeHtml(t.owner)}</span>` : ''}${t.location ? `<span class="tx-location">📍 ${escapeHtml(t.location)}</span>` : ''}</td>
-                    <td>${escapeHtml(t.category)}</td>
+                    <td class="cat-editable" onclick="editarCategoriaTx('${t.id}', this)" title="Toque para alterar a categoria">${escapeHtml(t.category)} <span class="cat-edit-icon">✏️</span></td>
                     <td>${meta.origin}</td>
                     <td class="${meta.cls}">${meta.sign}${formatCurrency(t.amount)}</td>
                     <td style="text-align: center;">
@@ -1725,6 +1730,57 @@
                 <td>${totalMeta > 0 ? `<span class="meta-label" style="font-weight:bold;">${((grandTotal / totalMeta) * 100).toFixed(0)}% do orçamento total</span>` : ''}</td>
             `;
             tbody.appendChild(totalRow);
+        }
+
+        // =====================================================
+        // EDIÇÃO DE CATEGORIA DIRETO NO EXTRATO
+        // =====================================================
+        const ALL_CATEGORIES = [
+            'Alimentação / Fast Food', 'Transporte', 'Assinaturas (IA & Softwares)',
+            'Família & Pets', 'Mercado', 'Farmácia', 'Contas', 'Educação & Esportes',
+            'Receita / Salário', 'Outros'
+        ];
+
+        window.editarCategoriaTx = function(id, cell) {
+            if (cell.querySelector('select')) return; // já está em modo de edição
+            const tx = transactions.find(t => t.id === id);
+            if (!tx) return;
+            const atual = tx.category || 'Outros';
+
+            const opcoes = [...ALL_CATEGORIES];
+            if (!opcoes.includes(atual)) opcoes.unshift(atual); // categorias antigas (ex.: Moradia) continuam selecionáveis
+
+            const select = document.createElement('select');
+            select.style.cssText = 'width:100%; padding:6px; border:1px solid var(--primary); border-radius:4px; font-size:0.85rem;';
+            opcoes.forEach(cat => {
+                const opt = document.createElement('option');
+                opt.value = cat;
+                opt.textContent = cat;
+                if (cat === atual) opt.selected = true;
+                select.appendChild(opt);
+            });
+
+            const restaurar = () => {
+                cell.innerHTML = `${escapeHtml(tx.category)} <span class="cat-edit-icon">✏️</span>`;
+            };
+
+            select.onchange = async () => {
+                const nova = select.value;
+                if (nova === atual) return restaurar();
+                select.disabled = true;
+                try {
+                    await updateDoc(doc(db, "transactions", id), { category: nova });
+                    // O onSnapshot re-renderiza o extrato automaticamente com a nova categoria
+                } catch (e) {
+                    alert('Erro ao alterar categoria: ' + e.message);
+                    restaurar();
+                }
+            };
+            select.onblur = () => { if (!select.disabled) restaurar(); };
+
+            cell.innerHTML = '';
+            cell.appendChild(select);
+            select.focus();
         }
 
         // =====================================================
