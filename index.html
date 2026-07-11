@@ -829,9 +829,9 @@
                     <div class="form-field">
                         <label for="txCategory">Categoria</label>
                         <select id="txCategory" required>
-                            <option value="Lanches">Lanches</option>
+                            <option value="Lanche">Lanche</option>
                             <option value="Transporte">Transporte</option>
-                            <option value="Assinaturas">Assinaturas</option>
+                            <option value="Assinatura">Assinatura</option>
                             <option value="Pets">Pets</option>
                             <option value="Mercado">Mercado</option>
                             <option value="Farmácia">Farmácia</option>
@@ -882,7 +882,7 @@
                     <code>amount</code>, <code>category</code>, <code>date</code> (AAAA-MM-DDTHH:MM), <code>description</code>
                     <code>location</code> (opcional) e <code>owner</code> (opcional: Conjunta, Marcelo ou Amanda).
                 </p>
-                <textarea id="importJsonInput" placeholder='[{"type":"gasto_cc","amount":7.32,"category":"Lanches","date":"2026-07-05T15:44","description":"Pão francês 0,488kg (Pix)","location":"Bonanza Supermercados"}]'></textarea>
+                <textarea id="importJsonInput" placeholder='[{"type":"gasto_cc","amount":7.32,"category":"Lanche","date":"2026-07-05T15:44","description":"Pão francês 0,488kg (Pix)","location":"Bonanza Supermercados"}]'></textarea>
                 <div class="import-error" id="importError"></div>
                 <div class="import-preview" id="importPreview"></div>
                 <div class="actions-bar">
@@ -1150,8 +1150,10 @@
         // =====================================================
         const LEGACY_CATEGORY_RENAMES = {
             'Família & Pets': 'Pets',
-            'Assinaturas (IA & Softwares)': 'Assinaturas',
-            'Alimentação / Fast Food': 'Lanches'
+            'Assinaturas (IA & Softwares)': 'Assinatura',
+            'Assinaturas': 'Assinatura',
+            'Alimentação / Fast Food': 'Lanche',
+            'Lanches': 'Lanche'
         };
         const migratedCategoryTxIds = new Set();
 
@@ -1824,7 +1826,7 @@
         // EDIÇÃO DE CATEGORIA DIRETO NO EXTRATO
         // =====================================================
         const ALL_CATEGORIES = [
-            'Lanches', 'Transporte', 'Assinaturas',
+            'Lanche', 'Transporte', 'Assinatura',
             'Pets', 'Mercado', 'Farmácia', 'Contas', 'Educação & Esportes',
             'Receita / Salário', 'Outros'
         ];
@@ -2378,7 +2380,7 @@
         // --- IMPORTAR TRANSAÇÕES VIA JSON (fluxo: foto do cupom → Claude → colar aqui) ---
         const VALID_TYPES = ['entrada', 'gasto_cc', 'gasto_cartao'];
         const VALID_CATEGORIES = [
-            'Lanches', 'Transporte', 'Assinaturas',
+            'Lanche', 'Transporte', 'Assinatura',
             'Pets', 'Mercado', 'Farmácia', 'Contas', 'Educação & Esportes', 'Receita / Salário', 'Outros'
         ];
         const VALID_OWNERS = ['Conjunta', 'Marcelo', 'Amanda'];
