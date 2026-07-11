@@ -8,6 +8,9 @@
     <meta name="theme-color" content="#1e3a8a">
     <link rel="apple-touch-icon" href="./icon-192.png">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <style>
         :root {
             --primary: #1e3a8a;
@@ -369,6 +372,34 @@
         }
         .fixed-expenses-table th { background-color: var(--neutral-light); }
 
+        .export-menu {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: calc(100% + 4px);
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.15);
+            min-width: 170px;
+            z-index: 20;
+            overflow: hidden;
+        }
+        .export-menu.open { display: block; }
+        .export-menu button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: none;
+            border: none;
+            border-radius: 0;
+            padding: 10px 14px;
+            font-size: 0.85rem;
+            font-weight: normal;
+            color: var(--neutral-dark);
+        }
+        .export-menu button:hover { background-color: var(--neutral-light); }
+
         .btn-migrate {
             background-color: #e0e7ff;
             color: var(--primary);
@@ -656,6 +687,14 @@
                     <input type="month" id="viewPeriod" style="padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; font-family: Arial, sans-serif; font-size: 0.9rem;" onchange="window.updatePeriodChange()">
                 </div>
                 <a href="analise.html" style="text-decoration: none; font-weight: bold; font-size: 0.85rem; color: var(--primary); border: 1px solid var(--border-color); padding: 7px 12px; border-radius: 4px; background: #fff;">📊 Análise de Preços</a>
+                <div class="export-dropdown" style="position: relative;">
+                    <button type="button" class="btn-action" style="padding: 7px 12px; font-size: 0.85rem; font-weight: bold;" onclick="toggleExportMenu(event)">📤 Exportar Dados ▾</button>
+                    <div id="exportMenu" class="export-menu">
+                        <button type="button" onclick="exportToExcel()">📊 Excel (.xlsx)</button>
+                        <button type="button" onclick="exportToPDF()">📄 PDF</button>
+                        <button type="button" onclick="exportToMarkdown()">📝 Markdown (.md)</button>
+                    </div>
+                </div>
                 <button type="button" class="btn-action" style="padding: 7px 12px; font-size: 0.85rem; font-weight: bold;" onclick="exportBackup()">💾 Backup</button>
                 <button class="btn-logout" onclick="handleLogout()">🚪 Sair</button>
             </div>
@@ -989,9 +1028,10 @@
         const googleProvider = new GoogleAuthProvider();
 
         // Estado global
+        const DEFAULT_CREDIT_LIMIT = 1238.48;
         let transactions = [];
         let fixedExpenses = [];
-        let creditLimitTotal = 1238.48;
+        let creditLimitTotal = DEFAULT_CREDIT_LIMIT;
         let lastComputedBalances = { currentCC: 0, projectedCC: 0 };
         let planningSettings = { target_date: null, base_mode: 'saldo_atual', manual_value: 0 };
         let categoryBudgets = {};
@@ -1060,7 +1100,7 @@
             });
 
             onSnapshot(doc(db, "app_settings", "credit_card"), (docSnap) => {
-                creditLimitTotal = docSnap.exists() ? (docSnap.data().total_limit || 1238.48) : 1238.48;
+                creditLimitTotal = docSnap.exists() ? (docSnap.data().total_limit || DEFAULT_CREDIT_LIMIT) : DEFAULT_CREDIT_LIMIT;
                 recalculateAndRender();
             });
 
@@ -1138,6 +1178,43 @@
             }
             now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
             return now.toISOString().slice(0, 16);
+        }
+
+        // Lê o "Mês de Referência" selecionado e devolve os limites usados em todo o cálculo de
+        // saldo/fatura do período (evita repetir o parse de viewPeriod em cada função de ajuste).
+        function getSelectedPeriodBounds() {
+            const now = new Date();
+            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
+            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
+            const selMonth = selMonthIdx - 1;
+            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
+            return { now, selYear, selMonth, endOfSelectedMonth };
+        }
+
+        // Fatura do cartão acumulada até uma data-limite. Não exclui lançamentos futuros dentro do
+        // mês: uma compra no cartão já é um compromisso assumido, diferente de uma entrada/saída de
+        // conta corrente que só se efetiva na data agendada.
+        function sumCardInvoiceUpTo(endDate) {
+            let total = 0;
+            transactions.forEach(t => {
+                if (new Date(t.date) > endDate) return;
+                if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') total += t.amount;
+                if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') total -= t.amount;
+            });
+            return total;
+        }
+
+        // Saldo da Conta Corrente até uma data-limite, ignorando lançamentos ainda futuros (agendados
+        // mas não efetivados).
+        function sumCCBalanceUpTo(endDate, now) {
+            let total = 0;
+            transactions.forEach(t => {
+                const txDate = new Date(t.date);
+                if (txDate > endDate || txDate > now) return;
+                if (t.type === 'entrada' || t.type === 'ajuste_cc_entrada') total += t.amount;
+                if (t.type === 'gasto_cc' || t.type === 'pagamento_fatura' || t.type === 'ajuste_cc_saida') total -= t.amount;
+            });
+            return total;
         }
 
         function formatCurrency(val) {
@@ -1289,9 +1366,7 @@
             tbody.innerHTML = '';
 
             let total = 0;
-            const periodVal = document.getElementById('viewPeriod').value || new Date().toISOString().slice(0, 7);
-            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
-            const selMonth = selMonthIdx - 1;
+            const { selYear, selMonth } = getSelectedPeriodBounds();
 
             fixedExpenses.forEach((exp, idx) => {
                 total += exp.amount;
@@ -1417,11 +1492,8 @@
         }
 
         window.ajustarLimiteDisponivel = async function() {
-            let currentInvoice = 0;
-            transactions.forEach(t => {
-                if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') currentInvoice += t.amount;
-                if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') currentInvoice -= t.amount;
-            });
+            const { endOfSelectedMonth } = getSelectedPeriodBounds();
+            const currentInvoice = sumCardInvoiceUpTo(endOfSelectedMonth);
             let currentAvailable = creditLimitTotal - currentInvoice;
 
             const input = prompt("Digite o LIMITE DISPONÍVEL atual do cartão:", currentAvailable.toFixed(2));
@@ -1432,20 +1504,8 @@
         }
 
         window.ajustarSaldoCC = async function() {
-            let currentCC = 0;
-            const now = new Date();
-            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
-            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
-            const selMonth = selMonthIdx - 1;
-            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
-
-            transactions.forEach(t => {
-                const txDate = new Date(t.date);
-                if (txDate <= endOfSelectedMonth && txDate <= now) {
-                    if (t.type === 'entrada' || t.type === 'ajuste_cc_entrada') currentCC += t.amount;
-                    if (t.type === 'gasto_cc' || t.type === 'pagamento_fatura' || t.type === 'ajuste_cc_saida') currentCC -= t.amount;
-                }
-            });
+            const { now, endOfSelectedMonth } = getSelectedPeriodBounds();
+            const currentCC = sumCCBalanceUpTo(endOfSelectedMonth, now);
 
             const input = prompt(`Ajuste o saldo da Conta Corrente para fecho do mês selecionado:`, currentCC.toFixed(2));
             if (input === null || input.trim() === '') return;
@@ -1465,20 +1525,8 @@
         }
 
         window.ajustarFatura = async function() {
-            let currentInvoice = 0;
-            const now = new Date();
-            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
-            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
-            const selMonth = selMonthIdx - 1;
-            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
-
-            transactions.forEach(t => {
-                const txDate = new Date(t.date);
-                if (txDate <= endOfSelectedMonth) {
-                    if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') currentInvoice += t.amount;
-                    if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') currentInvoice -= t.amount;
-                }
-            });
+            const { endOfSelectedMonth } = getSelectedPeriodBounds();
+            const currentInvoice = sumCardInvoiceUpTo(endOfSelectedMonth);
 
             const input = prompt(`Ajuste o valor da Fatura acumulada até este período:`, currentInvoice.toFixed(2));
             if (input === null || input.trim() === '') return;
@@ -1521,12 +1569,7 @@
             let futureCC = 0;
             let cardInvoice = 0;
 
-            const now = new Date();
-            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
-            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
-            const selMonth = selMonthIdx - 1;
-
-            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
+            const { now, selYear, selMonth, endOfSelectedMonth } = getSelectedPeriodBounds();
             const ledgerBody = document.getElementById('ledgerBody');
             ledgerBody.innerHTML = '';
 
@@ -1924,6 +1967,164 @@
             URL.revokeObjectURL(url);
         }
 
+        // =====================================================
+        // EXPORTAR DADOS (Excel / PDF / Markdown)
+        // =====================================================
+        window.toggleExportMenu = function(e) {
+            e.stopPropagation();
+            document.getElementById('exportMenu').classList.toggle('open');
+        }
+        document.addEventListener('click', () => {
+            document.getElementById('exportMenu')?.classList.remove('open');
+        });
+
+        // Monta as linhas do extrato completo (todas as transações, mais recentes primeiro)
+        // reaproveitadas pelas três exportações para manter os dados consistentes entre formatos.
+        function buildExportRows() {
+            const sorted = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+            return sorted.map(t => {
+                const isFuture = new Date(t.date) > new Date();
+                const meta = txDisplayMeta(t, isFuture);
+                const signedValue = meta.sign.trim() === '-' ? -t.amount : t.amount;
+                return {
+                    date: formatDate(t.date),
+                    description: t.description || 'Sem descrição',
+                    location: t.location || '',
+                    owner: t.owner || 'Conjunta',
+                    category: t.category || 'Outros',
+                    origin: meta.origin,
+                    value: signedValue
+                };
+            });
+        }
+
+        function buildExportSummary() {
+            return [
+                ['Conta Corrente (disponível hoje)', lastComputedBalances.currentCC],
+                ['Saldo Projetado (com agendados)', lastComputedBalances.projectedCC],
+                ['Limite Total do Cartão', creditLimitTotal]
+            ];
+        }
+
+        window.exportToExcel = function() {
+            if (!transactions.length && !fixedExpenses.length) return alert('Ainda não há dados para exportar.');
+            if (typeof XLSX === 'undefined') return alert('Biblioteca de exportação (Excel) não carregou. Verifique a conexão e tente novamente.');
+
+            const wb = XLSX.utils.book_new();
+            const stamp = new Date().toISOString().slice(0, 10);
+
+            const resumoData = [['Item', 'Valor (R$)'], ...buildExportSummary()];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumoData), 'Resumo');
+
+            const rows = buildExportRows();
+            const extratoData = [
+                ['Data / Hora', 'Descrição', 'Local', 'Pessoa', 'Categoria', 'Origem', 'Valor (R$)'],
+                ...rows.map(r => [r.date, r.description, r.location, r.owner, r.category, r.origin, r.value])
+            ];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(extratoData), 'Extrato');
+
+            const fixedData = [['Descrição / Conta', 'Valor Previsto (R$)'], ...fixedExpenses.map(exp => [exp.name, exp.amount])];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(fixedData), 'Gastos Fixos');
+
+            const budgetEntries = Object.entries(categoryBudgets);
+            if (budgetEntries.length) {
+                const budgetData = [['Categoria', 'Meta Mensal (R$)'], ...budgetEntries];
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(budgetData), 'Metas');
+            }
+
+            XLSX.writeFile(wb, `controle-financeiro-${stamp}.xlsx`);
+        }
+
+        window.exportToPDF = function() {
+            if (!transactions.length && !fixedExpenses.length) return alert('Ainda não há dados para exportar.');
+            if (typeof window.jspdf === 'undefined') return alert('Biblioteca de exportação (PDF) não carregou. Verifique a conexão e tente novamente.');
+
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF();
+            const stamp = new Date().toLocaleDateString('pt-BR');
+
+            pdf.setFontSize(16);
+            pdf.text('Controle Financeiro Integrado', 14, 16);
+            pdf.setFontSize(9);
+            pdf.setTextColor(100);
+            pdf.text(`Exportado em ${stamp}`, 14, 22);
+
+            pdf.autoTable({
+                startY: 28,
+                head: [['Resumo', 'Valor']],
+                body: buildExportSummary().map(([label, val]) => [label, formatCurrency(val)]),
+                styles: { fontSize: 9 },
+                headStyles: { fillColor: [30, 58, 138] }
+            });
+
+            const rows = buildExportRows();
+            pdf.autoTable({
+                startY: pdf.lastAutoTable.finalY + 10,
+                head: [['Data', 'Descrição', 'Categoria', 'Origem', 'Valor']],
+                body: rows.map(r => [r.date, r.description, r.category, r.origin, formatCurrency(r.value)]),
+                styles: { fontSize: 8 },
+                headStyles: { fillColor: [30, 58, 138] }
+            });
+
+            if (fixedExpenses.length) {
+                pdf.addPage();
+                pdf.setFontSize(14);
+                pdf.setTextColor(0);
+                pdf.text('Gastos Fixos Previstos', 14, 16);
+                pdf.autoTable({
+                    startY: 22,
+                    head: [['Descrição / Conta', 'Valor Previsto']],
+                    body: fixedExpenses.map(exp => [exp.name, formatCurrency(exp.amount)]),
+                    styles: { fontSize: 9 },
+                    headStyles: { fillColor: [30, 58, 138] }
+                });
+            }
+
+            pdf.save(`controle-financeiro-${new Date().toISOString().slice(0, 10)}.pdf`);
+        }
+
+        window.exportToMarkdown = function() {
+            if (!transactions.length && !fixedExpenses.length) return alert('Ainda não há dados para exportar.');
+
+            const mdEscape = (v) => String(v ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ');
+            const stamp = new Date().toLocaleString('pt-BR');
+            let md = `# Controle Financeiro Integrado\n\n_Exportado em ${stamp}_\n\n`;
+
+            md += `## Resumo\n\n| Item | Valor |\n|---|---|\n`;
+            buildExportSummary().forEach(([label, val]) => {
+                md += `| ${mdEscape(label)} | ${formatCurrency(val)} |\n`;
+            });
+
+            md += `\n## Extrato de Transações\n\n| Data | Descrição | Categoria | Origem | Valor |\n|---|---|---|---|---|\n`;
+            buildExportRows().forEach(r => {
+                md += `| ${mdEscape(r.date)} | ${mdEscape(r.description)} | ${mdEscape(r.category)} | ${mdEscape(r.origin)} | ${formatCurrency(r.value)} |\n`;
+            });
+
+            if (fixedExpenses.length) {
+                md += `\n## Gastos Fixos Previstos\n\n| Descrição / Conta | Valor Previsto |\n|---|---|\n`;
+                fixedExpenses.forEach(exp => {
+                    md += `| ${mdEscape(exp.name)} | ${formatCurrency(exp.amount)} |\n`;
+                });
+            }
+
+            const budgetEntries = Object.entries(categoryBudgets);
+            if (budgetEntries.length) {
+                md += `\n## Metas por Categoria\n\n| Categoria | Meta Mensal |\n|---|---|\n`;
+                budgetEntries.forEach(([cat, val]) => {
+                    md += `| ${mdEscape(cat)} | ${formatCurrency(val)} |\n`;
+                });
+            }
+
+            const blob = new Blob([md], { type: 'text/markdown;charset=utf-8;' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `controle-financeiro-${new Date().toISOString().slice(0, 10)}.md`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+        }
+
         window.editarMeta = async function(cat) {
             const atual = categoryBudgets[cat] || '';
             const input = prompt(`Meta mensal para "${cat}" (R$):\n(Deixe vazio ou 0 para remover a meta)`, atual);
@@ -2239,20 +2440,8 @@
         }
 
         window.payCardInvoice = async function() {
-            let currentInvoice = 0;
-            const now = new Date();
-            const periodVal = document.getElementById('viewPeriod').value || now.toISOString().slice(0, 7);
-            const [selYear, selMonthIdx] = periodVal.split('-').map(Number);
-            const selMonth = selMonthIdx - 1;
-            const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
-
-            transactions.forEach(t => {
-                const txDate = new Date(t.date);
-                if (txDate <= endOfSelectedMonth) {
-                    if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') currentInvoice += t.amount;
-                    if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') currentInvoice -= t.amount;
-                }
-            });
+            const { endOfSelectedMonth } = getSelectedPeriodBounds();
+            const currentInvoice = sumCardInvoiceUpTo(endOfSelectedMonth);
             if (currentInvoice <= 0) return alert("A fatura acumulada para este período já está zerada.");
 
             if (confirm(`Deseja pagar a fatura de ${formatCurrency(currentInvoice)} usando a Conta Corrente?`)) {
