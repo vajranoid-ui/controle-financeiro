@@ -1009,6 +1009,16 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
         import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
+        import {
+            VALID_TYPES, VALID_CATEGORIES, VALID_OWNERS, LEGACY_CATEGORY_RENAMES,
+            formatCurrency, formatDate, escapeHtml,
+            daysUntilInclusive, calcPlanning, defaultTargetDate,
+            sumCardInvoiceUpTo, sumCCBalanceUpTo, txDisplayMeta,
+            computeCategoryTotals, computeOwnerTotals, validateImportItem,
+            findLegacyCategoryMigrations, migrateLegacyBudgets,
+            monthKeyOf, monthLabel, buildArchiveData, buildArchiveCsvLines,
+            buildExportRows, buildExportSummary
+        } from './js/finance.js';
 
         // ==========================================
         // Configurações Reais do Seu Projeto Firebase
@@ -1148,40 +1158,24 @@
         // =====================================================
         // MIGRAÇÃO DE CATEGORIAS ANTIGAS (ex.: "Família & Pets" → "Pets")
         // =====================================================
-        const LEGACY_CATEGORY_RENAMES = {
-            'Família & Pets': 'Pets',
-            'Assinaturas (IA & Softwares)': 'Assinatura',
-            'Assinaturas': 'Assinatura',
-            'Alimentação / Fast Food': 'Lanche',
-            'Lanches': 'Lanche'
-        };
         const migratedCategoryTxIds = new Set();
 
         function migrateLegacyCategories() {
-            transactions.forEach(t => {
-                const novaCat = LEGACY_CATEGORY_RENAMES[t.category];
-                if (novaCat && !migratedCategoryTxIds.has(t.id)) {
-                    migratedCategoryTxIds.add(t.id);
-                    updateDoc(doc(db, "transactions", t.id), { category: novaCat })
+            findLegacyCategoryMigrations(transactions, LEGACY_CATEGORY_RENAMES, migratedCategoryTxIds)
+                .forEach(({ id, newCategory }) => {
+                    migratedCategoryTxIds.add(id);
+                    updateDoc(doc(db, "transactions", id), { category: newCategory })
                         .catch((e) => {
-                            console.error('Erro ao migrar categoria do lançamento', t.id, e);
-                            migratedCategoryTxIds.delete(t.id);
+                            console.error('Erro ao migrar categoria do lançamento', id, e);
+                            migratedCategoryTxIds.delete(id);
                         });
-                }
-            });
+                });
         }
 
         let legacyBudgetMigrationInFlight = false;
         function migrateLegacyCategoryBudget() {
             if (legacyBudgetMigrationInFlight) return;
-            const novos = { ...categoryBudgets };
-            let mudou = false;
-            Object.entries(LEGACY_CATEGORY_RENAMES).forEach(([antiga, nova]) => {
-                if (!(antiga in novos)) return;
-                if (novos[nova] === undefined) novos[nova] = novos[antiga];
-                delete novos[antiga];
-                mudou = true;
-            });
+            const { novos, mudou } = migrateLegacyBudgets(categoryBudgets, LEGACY_CATEGORY_RENAMES);
             if (!mudou) return;
 
             legacyBudgetMigrationInFlight = true;
@@ -1236,73 +1230,6 @@
             const selMonth = selMonthIdx - 1;
             const endOfSelectedMonth = new Date(selYear, selMonth + 1, 0, 23, 59, 59, 999);
             return { now, selYear, selMonth, endOfSelectedMonth };
-        }
-
-        // Fatura do cartão acumulada até uma data-limite. Não exclui lançamentos futuros dentro do
-        // mês: uma compra no cartão já é um compromisso assumido, diferente de uma entrada/saída de
-        // conta corrente que só se efetiva na data agendada.
-        function sumCardInvoiceUpTo(endDate) {
-            let total = 0;
-            transactions.forEach(t => {
-                if (new Date(t.date) > endDate) return;
-                if (t.type === 'gasto_cartao' || t.type === 'ajuste_cartao_aumento') total += t.amount;
-                if (t.type === 'pagamento_fatura' || t.type === 'ajuste_cartao_reducao') total -= t.amount;
-            });
-            return total;
-        }
-
-        // Saldo da Conta Corrente até uma data-limite, ignorando lançamentos ainda futuros (agendados
-        // mas não efetivados).
-        function sumCCBalanceUpTo(endDate, now) {
-            let total = 0;
-            transactions.forEach(t => {
-                const txDate = new Date(t.date);
-                if (txDate > endDate || txDate > now) return;
-                if (t.type === 'entrada' || t.type === 'ajuste_cc_entrada') total += t.amount;
-                if (t.type === 'gasto_cc' || t.type === 'pagamento_fatura' || t.type === 'ajuste_cc_saida') total -= t.amount;
-            });
-            return total;
-        }
-
-        function formatCurrency(val) {
-            return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-        }
-
-        function formatDate(dateString) {
-            const date = new Date(dateString);
-            return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        }
-
-        function escapeHtml(str) {
-            return String(str ?? '')
-                .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;').replaceAll('"', '&quot;')
-                .replaceAll("'", '&#39;');
-        }
-
-        // =====================================================
-        // PLANEJAMENTO: MÉDIAS DIÁRIA E SEMANAL ATÉ UMA DATA
-        // =====================================================
-        function daysUntilInclusive(targetDateStr, now) {
-            // Conta o dia de hoje e o dia-alvo. Ex.: hoje dia 03, alvo dia 31 -> 29 dias.
-            const [y, m, d] = targetDateStr.split('-').map(Number);
-            const target = new Date(y, m - 1, d);
-            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            const diff = Math.round((target - today) / 86400000);
-            return diff < 0 ? 0 : diff + 1;
-        }
-
-        function calcPlanning(baseValue, targetDateStr, now) {
-            const days = daysUntilInclusive(targetDateStr, now);
-            if (days <= 0) return { days: 0, daily: 0, weekly: 0 };
-            const daily = baseValue / days;
-            return { days, daily, weekly: daily * 7 };
-        }
-
-        function defaultTargetDate() {
-            const now = new Date();
-            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            return lastDay.toISOString().slice(0, 10);
         }
 
         function applyPlanningSettingsToUI() {
@@ -1540,7 +1467,7 @@
 
         window.ajustarLimiteDisponivel = async function() {
             const { endOfSelectedMonth } = getSelectedPeriodBounds();
-            const currentInvoice = sumCardInvoiceUpTo(endOfSelectedMonth);
+            const currentInvoice = sumCardInvoiceUpTo(transactions, endOfSelectedMonth);
             let currentAvailable = creditLimitTotal - currentInvoice;
 
             const input = prompt("Digite o LIMITE DISPONÍVEL atual do cartão:", currentAvailable.toFixed(2));
@@ -1552,7 +1479,7 @@
 
         window.ajustarSaldoCC = async function() {
             const { now, endOfSelectedMonth } = getSelectedPeriodBounds();
-            const currentCC = sumCCBalanceUpTo(endOfSelectedMonth, now);
+            const currentCC = sumCCBalanceUpTo(transactions, endOfSelectedMonth, now);
 
             const input = prompt(`Ajuste o saldo da Conta Corrente para fecho do mês selecionado:`, currentCC.toFixed(2));
             if (input === null || input.trim() === '') return;
@@ -1573,7 +1500,7 @@
 
         window.ajustarFatura = async function() {
             const { endOfSelectedMonth } = getSelectedPeriodBounds();
-            const currentInvoice = sumCardInvoiceUpTo(endOfSelectedMonth);
+            const currentInvoice = sumCardInvoiceUpTo(transactions, endOfSelectedMonth);
 
             const input = prompt(`Ajuste o valor da Fatura acumulada até este período:`, currentInvoice.toFixed(2));
             if (input === null || input.trim() === '') return;
@@ -1590,24 +1517,6 @@
                 date: getTransactionDateContext(),
                 description: 'Ajuste manual de fatura (Cartão de Crédito)'
             });
-        }
-
-        // Metadados de exibição por tipo de transação (compartilhado entre extrato e arquivo)
-        function txDisplayMeta(t, isFuture) {
-            switch (t.type) {
-                case 'entrada': case 'ajuste_cc_entrada':
-                    return { origin: t.type === 'entrada' ? 'Conta Corrente' : 'Ajuste Sistêmico', cls: isFuture ? 'text-future' : 'text-in', sign: '+ ' };
-                case 'gasto_cc': case 'ajuste_cc_saida':
-                    return { origin: t.type === 'gasto_cc' ? 'Conta Corrente' : 'Ajuste Sistêmico', cls: isFuture ? 'text-future' : 'text-out', sign: '- ' };
-                case 'gasto_cartao': case 'ajuste_cartao_aumento':
-                    return { origin: t.type === 'gasto_cartao' ? 'Cartão de Crédito' : 'Ajuste Sistêmico', cls: 'text-out', sign: '- ' };
-                case 'pagamento_fatura':
-                    return { origin: 'C. Corrente → Cartão', cls: 'text-neutral', sign: ' ' };
-                case 'ajuste_cartao_reducao':
-                    return { origin: 'Ajuste Sistêmico', cls: 'text-in', sign: '+ ' };
-                default:
-                    return { origin: '—', cls: 'text-neutral', sign: '' };
-            }
         }
 
         // --- CÁLCULO E RENDERIZAÇÃO PRINCIPAL ---
@@ -1730,17 +1639,7 @@
 
         function renderCategorySummary(selYear, selMonth) {
             const tbody = document.getElementById('categoryBody');
-            const totals = {};
-            let grandTotal = 0;
-
-            transactions.forEach(t => {
-                if (t.type !== 'gasto_cc' && t.type !== 'gasto_cartao') return;
-                const tDate = new Date(t.date);
-                if (tDate.getMonth() !== selMonth || tDate.getFullYear() !== selYear) return;
-                const cat = t.category || 'Outros';
-                totals[cat] = (totals[cat] || 0) + t.amount;
-                grandTotal += t.amount;
-            });
+            const { totals, grandTotal } = computeCategoryTotals(transactions, selYear, selMonth);
 
             renderOwnerSummary(selYear, selMonth, grandTotal);
 
@@ -1825,11 +1724,7 @@
         // =====================================================
         // EDIÇÃO DE CATEGORIA DIRETO NO EXTRATO
         // =====================================================
-        const ALL_CATEGORIES = [
-            'Lanche', 'Transporte', 'Assinatura',
-            'Pets', 'Mercado', 'Farmácia', 'Contas', 'Educação & Esportes',
-            'Receita / Salário', 'Outros'
-        ];
+        const ALL_CATEGORIES = VALID_CATEGORIES;
 
         window.editarCategoriaTx = function(id, cell) {
             if (cell.querySelector('select')) return; // já está em modo de edição
@@ -2025,34 +1920,6 @@
             document.getElementById('exportMenu')?.classList.remove('open');
         });
 
-        // Monta as linhas do extrato completo (todas as transações, mais recentes primeiro)
-        // reaproveitadas pelas três exportações para manter os dados consistentes entre formatos.
-        function buildExportRows() {
-            const sorted = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
-            return sorted.map(t => {
-                const isFuture = new Date(t.date) > new Date();
-                const meta = txDisplayMeta(t, isFuture);
-                const signedValue = meta.sign.trim() === '-' ? -t.amount : t.amount;
-                return {
-                    date: formatDate(t.date),
-                    description: t.description || 'Sem descrição',
-                    location: t.location || '',
-                    owner: t.owner || 'Conjunta',
-                    category: t.category || 'Outros',
-                    origin: meta.origin,
-                    value: signedValue
-                };
-            });
-        }
-
-        function buildExportSummary() {
-            return [
-                ['Conta Corrente (disponível hoje)', lastComputedBalances.currentCC],
-                ['Saldo Projetado (com agendados)', lastComputedBalances.projectedCC],
-                ['Limite Total do Cartão', creditLimitTotal]
-            ];
-        }
-
         window.exportToExcel = function() {
             if (!transactions.length && !fixedExpenses.length) return alert('Ainda não há dados para exportar.');
             if (typeof XLSX === 'undefined') return alert('Biblioteca de exportação (Excel) não carregou. Verifique a conexão e tente novamente.');
@@ -2060,10 +1927,10 @@
             const wb = XLSX.utils.book_new();
             const stamp = new Date().toISOString().slice(0, 10);
 
-            const resumoData = [['Item', 'Valor (R$)'], ...buildExportSummary()];
+            const resumoData = [['Item', 'Valor (R$)'], ...buildExportSummary(lastComputedBalances, creditLimitTotal)];
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumoData), 'Resumo');
 
-            const rows = buildExportRows();
+            const rows = buildExportRows(transactions);
             const extratoData = [
                 ['Data / Hora', 'Descrição', 'Local', 'Pessoa', 'Categoria', 'Origem', 'Valor (R$)'],
                 ...rows.map(r => [r.date, r.description, r.location, r.owner, r.category, r.origin, r.value])
@@ -2099,12 +1966,12 @@
             pdf.autoTable({
                 startY: 28,
                 head: [['Resumo', 'Valor']],
-                body: buildExportSummary().map(([label, val]) => [label, formatCurrency(val)]),
+                body: buildExportSummary(lastComputedBalances, creditLimitTotal).map(([label, val]) => [label, formatCurrency(val)]),
                 styles: { fontSize: 9 },
                 headStyles: { fillColor: [30, 58, 138] }
             });
 
-            const rows = buildExportRows();
+            const rows = buildExportRows(transactions);
             pdf.autoTable({
                 startY: pdf.lastAutoTable.finalY + 10,
                 head: [['Data', 'Descrição', 'Categoria', 'Origem', 'Valor']],
@@ -2138,12 +2005,12 @@
             let md = `# Controle Financeiro Integrado\n\n_Exportado em ${stamp}_\n\n`;
 
             md += `## Resumo\n\n| Item | Valor |\n|---|---|\n`;
-            buildExportSummary().forEach(([label, val]) => {
+            buildExportSummary(lastComputedBalances, creditLimitTotal).forEach(([label, val]) => {
                 md += `| ${mdEscape(label)} | ${formatCurrency(val)} |\n`;
             });
 
             md += `\n## Extrato de Transações\n\n| Data | Descrição | Categoria | Origem | Valor |\n|---|---|---|---|---|\n`;
-            buildExportRows().forEach(r => {
+            buildExportRows(transactions).forEach(r => {
                 md += `| ${mdEscape(r.date)} | ${mdEscape(r.description)} | ${mdEscape(r.category)} | ${mdEscape(r.origin)} | ${formatCurrency(r.value)} |\n`;
             });
 
@@ -2187,15 +2054,7 @@
 
         function renderOwnerSummary(selYear, selMonth, grandTotal) {
             const tbody = document.getElementById('ownerBody');
-            const totals = { 'Conjunta': 0, 'Marcelo': 0, 'Amanda': 0 };
-
-            transactions.forEach(t => {
-                if (t.type !== 'gasto_cc' && t.type !== 'gasto_cartao') return;
-                const tDate = new Date(t.date);
-                if (tDate.getMonth() !== selMonth || tDate.getFullYear() !== selYear) return;
-                const owner = totals.hasOwnProperty(t.owner) ? t.owner : 'Conjunta';
-                totals[owner] += t.amount;
-            });
+            const totals = computeOwnerTotals(transactions, selYear, selMonth);
 
             if (grandTotal === 0) {
                 tbody.innerHTML = `<tr><td colspan="4" class="no-data">Sem gastos registrados neste mês.</td></tr>`;
@@ -2220,35 +2079,10 @@
         // =====================================================
         // ARQUIVO DE MESES ANTERIORES
         // =====================================================
-        function monthKeyOf(dateStr) {
-            const d = new Date(dateStr);
-            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        }
-
-        function monthLabel(key) {
-            const [y, m] = key.split('-').map(Number);
-            return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-        }
-
-        function buildArchiveData(now) {
-            const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-            const groups = {};
-            transactions.forEach(t => {
-                const key = monthKeyOf(t.date);
-                if (key >= currentKey) return; // arquiva apenas meses já encerrados
-                if (!groups[key]) groups[key] = { key, entradas: 0, saidas: 0, count: 0, items: [] };
-                const g = groups[key];
-                g.count++;
-                g.items.push(t);
-                if (t.type === 'entrada' || t.type === 'ajuste_cc_entrada') g.entradas += t.amount;
-                if (t.type === 'gasto_cc' || t.type === 'gasto_cartao' || t.type === 'ajuste_cc_saida') g.saidas += t.amount;
-            });
-            return Object.values(groups).sort((a, b) => b.key.localeCompare(a.key));
-        }
 
         function renderArchive(now) {
             const tbody = document.getElementById('archiveBody');
-            const months = buildArchiveData(now);
+            const months = buildArchiveData(transactions, now);
 
             if (months.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="6" class="no-data">Nenhum mês encerrado com lançamentos até agora.</td></tr>`;
@@ -2322,30 +2156,10 @@
         }
 
         window.downloadArchiveCsv = function(key) {
-            const g = buildArchiveData(new Date()).find(m => m.key === key);
+            const g = buildArchiveData(transactions, new Date()).find(m => m.key === key);
             if (!g) return;
 
-            const csvEscape = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
-            const lines = ['Data;Descricao;Local;Pessoa;Categoria;Tipo;Valor'];
-            const sorted = [...g.items].sort((a, b) => new Date(a.date) - new Date(b.date));
-            sorted.forEach(t => {
-                const meta = txDisplayMeta(t, false);
-                const signedValue = (meta.sign.trim() === '-' ? -t.amount : t.amount).toFixed(2).replace('.', ',');
-                lines.push([
-                    csvEscape(formatDate(t.date)),
-                    csvEscape(t.description || 'Sem descrição'),
-                    csvEscape(t.location || ''),
-                    csvEscape(t.owner || 'Conjunta'),
-                    csvEscape(t.category),
-                    csvEscape(meta.origin),
-                    csvEscape(signedValue)
-                ].join(';'));
-            });
-            lines.push('');
-            lines.push([csvEscape('TOTAL ENTRADAS'), '', '', '', '', '', csvEscape(g.entradas.toFixed(2).replace('.', ','))].join(';'));
-            lines.push([csvEscape('TOTAL SAIDAS'), '', '', '', '', '', csvEscape(('-' + g.saidas.toFixed(2)).replace('.', ','))].join(';'));
-            lines.push([csvEscape('RESULTADO'), '', '', '', '', '', csvEscape((g.entradas - g.saidas).toFixed(2).replace('.', ','))].join(';'));
-
+            const lines = buildArchiveCsvLines(g);
             const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -2378,12 +2192,6 @@
         }
 
         // --- IMPORTAR TRANSAÇÕES VIA JSON (fluxo: foto do cupom → Claude → colar aqui) ---
-        const VALID_TYPES = ['entrada', 'gasto_cc', 'gasto_cartao'];
-        const VALID_CATEGORIES = [
-            'Lanche', 'Transporte', 'Assinatura',
-            'Pets', 'Mercado', 'Farmácia', 'Contas', 'Educação & Esportes', 'Receita / Salário', 'Outros'
-        ];
-        const VALID_OWNERS = ['Conjunta', 'Marcelo', 'Amanda'];
         let pendingImport = [];
 
         window.toggleImportPanel = function() {
@@ -2400,25 +2208,6 @@
             const btn = document.getElementById('btnImportConfirm');
             btn.disabled = true;
             btn.style.opacity = '0.5';
-        }
-
-        function validateImportItem(item, idx) {
-            const errors = [];
-            const tx = {
-                type: String(item.type || 'gasto_cc').trim(),
-                amount: parseFloat(item.amount),
-                category: String(item.category || 'Outros').trim(),
-                date: String(item.date || '').trim(),
-                description: String(item.description || '').trim(),
-                location: String(item.location || '').trim(),
-                owner: VALID_OWNERS.includes(String(item.owner || '').trim()) ? String(item.owner).trim() : 'Conjunta'
-            };
-            if (!VALID_TYPES.includes(tx.type)) errors.push(`Item ${idx + 1}: tipo "${tx.type}" inválido (use: ${VALID_TYPES.join(', ')}).`);
-            if (isNaN(tx.amount) || tx.amount <= 0) errors.push(`Item ${idx + 1}: valor inválido.`);
-            if (!VALID_CATEGORIES.includes(tx.category)) tx.category = 'Outros';
-            if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(tx.date)) errors.push(`Item ${idx + 1}: data inválida (use AAAA-MM-DDTHH:MM).`);
-            else tx.date = tx.date.slice(0, 16);
-            return { tx, errors };
         }
 
         window.previewImportJson = function() {
@@ -2488,7 +2277,7 @@
 
         window.payCardInvoice = async function() {
             const { endOfSelectedMonth } = getSelectedPeriodBounds();
-            const currentInvoice = sumCardInvoiceUpTo(endOfSelectedMonth);
+            const currentInvoice = sumCardInvoiceUpTo(transactions, endOfSelectedMonth);
             if (currentInvoice <= 0) return alert("A fatura acumulada para este período já está zerada.");
 
             if (confirm(`Deseja pagar a fatura de ${formatCurrency(currentInvoice)} usando a Conta Corrente?`)) {
