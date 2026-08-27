@@ -756,6 +756,13 @@
                     </div>
                 </td>
             </tr>
+            <tr class="total-row">
+                <td class="label">Saldo Total Disponível <br><span style="font-weight: normal; font-size: 0.8rem; color: #64748b;">(Conta Corrente + Limite do Cartão)</span></td>
+                <td class="value">
+                    <span id="totalAvailable" class="main-balance">R$ 0,00</span>
+                    <div class="info-tag" style="display:block; margin: 4px 0 0 0;">Quanto você poderia gastar somando dinheiro em conta e crédito ainda não usado</div>
+                </td>
+            </tr>
         </table>
         </div>
 
@@ -780,6 +787,11 @@
                     <input type="date" id="planTargetDate" onchange="window.onPlanningControlChange()">
                 </div>
             </div>
+
+            <label class="lc-check" style="margin-bottom: 14px; color: var(--primary);" id="planIncludeCardLabel">
+                <input type="checkbox" id="planIncludeCard" onchange="window.onPlanningControlChange()">
+                Incluir limite disponível do cartão no cálculo
+            </label>
 
             <div class="planning-stats">
                 <div class="stat-card">
@@ -830,12 +842,19 @@
                         <label for="txCategory">Categoria</label>
                         <select id="txCategory" required>
                             <option value="Lanche">Lanche</option>
+                            <option value="Restaurante">Restaurante</option>
                             <option value="Transporte">Transporte</option>
                             <option value="Assinatura">Assinatura</option>
                             <option value="Pets">Pets</option>
                             <option value="Mercado">Mercado</option>
                             <option value="Farmácia">Farmácia</option>
+                            <option value="Saúde">Saúde</option>
                             <option value="Contas">Contas</option>
+                            <option value="Casa">Casa</option>
+                            <option value="Roupas">Roupas</option>
+                            <option value="Lazer">Lazer</option>
+                            <option value="Presentes">Presentes</option>
+                            <option value="Viagem">Viagem</option>
                             <option value="Educação & Esportes">Educação & Esportes</option>
                             <option value="Receita / Salário">Receita / Salário</option>
                             <option value="Outros">Outros</option>
@@ -1032,8 +1051,8 @@
         let transactions = [];
         let fixedExpenses = [];
         let creditLimitTotal = DEFAULT_CREDIT_LIMIT;
-        let lastComputedBalances = { currentCC: 0, projectedCC: 0 };
-        let planningSettings = { target_date: null, base_mode: 'saldo_atual', manual_value: 0 };
+        let lastComputedBalances = { currentCC: 0, projectedCC: 0, cardAvailable: 0 };
+        let planningSettings = { target_date: null, base_mode: 'saldo_atual', manual_value: 0, include_card: false };
         let categoryBudgets = {};
         let donutChart = null;
         let livroCaixa = { valor: 0, ativo: false };
@@ -1137,7 +1156,8 @@
                     planningSettings = {
                         target_date: data.target_date || null,
                         base_mode: data.base_mode || 'saldo_atual',
-                        manual_value: typeof data.manual_value === 'number' ? data.manual_value : 0
+                        manual_value: typeof data.manual_value === 'number' ? data.manual_value : 0,
+                        include_card: !!data.include_card
                     };
                 }
                 applyPlanningSettingsToUI();
@@ -1312,6 +1332,9 @@
             document.getElementById('planManualValue').value = planningSettings.manual_value || '';
             document.getElementById('planManualField').style.display =
                 planningSettings.base_mode === 'manual' ? 'flex' : 'none';
+            document.getElementById('planIncludeCard').checked = !!planningSettings.include_card;
+            document.getElementById('planIncludeCardLabel').style.display =
+                planningSettings.base_mode === 'manual' ? 'none' : 'flex';
             suppressPlanningSave = false;
         }
 
@@ -1320,9 +1343,11 @@
             const base_mode = document.getElementById('planBaseMode').value;
             const target_date = document.getElementById('planTargetDate').value || defaultTargetDate();
             const manual_value = parseFloat(document.getElementById('planManualValue').value) || 0;
+            const include_card = document.getElementById('planIncludeCard').checked;
 
-            planningSettings = { base_mode, target_date, manual_value };
+            planningSettings = { base_mode, target_date, manual_value, include_card };
             document.getElementById('planManualField').style.display = base_mode === 'manual' ? 'flex' : 'none';
+            document.getElementById('planIncludeCardLabel').style.display = base_mode === 'manual' ? 'none' : 'flex';
             renderPlanningPanel();
 
             try {
@@ -1343,6 +1368,12 @@
                 default: baseValue = lastComputedBalances.currentCC;
             }
 
+            // Limite disponível do cartão: soma ao valor considerado, se o usuário optou por incluir.
+            // Isso já reflete corretamente qualquer fatura pendente, pois gastar no cartão reduz o
+            // limite disponível automaticamente (cardAvailable = limite total - fatura acumulada).
+            const incluiCartao = planningSettings.include_card && planningSettings.base_mode !== 'manual';
+            if (incluiCartao) baseValue += lastComputedBalances.cardAvailable;
+
             // Livro Caixa ativo: desconta o valor da escola (dinheiro que não é gastável)
             const descontoLC = (livroCaixa.ativo && livroCaixa.valor > 0 && planningSettings.base_mode !== 'manual')
                 ? livroCaixa.valor : 0;
@@ -1351,11 +1382,12 @@
             const result = calcPlanning(baseValue, targetDateStr, now);
 
             const baseDisplayEl = document.getElementById('planBaseDisplay');
-            baseDisplayEl.innerHTML = formatCurrency(baseValue) + (descontoLC > 0
-                ? ` <span style="display:block; font-size:0.68rem; font-weight:normal; color:#92400e;">📒 já descontado o Livro Caixa (${formatCurrency(descontoLC)})</span>`
-                : '');
-            baseDisplayEl.title = descontoLC > 0
-                ? `Saldo da conta menos Livro Caixa (${formatCurrency(descontoLC)})` : '';
+            const notasBase = [];
+            if (incluiCartao) notasBase.push(`💳 já somado o limite disponível do cartão (${formatCurrency(lastComputedBalances.cardAvailable)})`);
+            if (descontoLC > 0) notasBase.push(`📒 já descontado o Livro Caixa (${formatCurrency(descontoLC)})`);
+            baseDisplayEl.innerHTML = formatCurrency(baseValue) +
+                notasBase.map(n => ` <span style="display:block; font-size:0.68rem; font-weight:normal; color:#92400e;">${n}</span>`).join('');
+            baseDisplayEl.title = notasBase.join(' · ');
             document.getElementById('planDaysDisplay').textContent =
                 result.days > 0 ? `${result.days} dia${result.days > 1 ? 's' : ''}` : 'Data já passou';
             document.getElementById('planDailyDisplay').textContent = formatCurrency(result.daily);
@@ -1642,7 +1674,7 @@
             let projectedCC = currentCC + futureCC;
             let cardAvailable = creditLimitTotal - cardInvoice;
 
-            lastComputedBalances = { currentCC, projectedCC };
+            lastComputedBalances = { currentCC, projectedCC, cardAvailable };
 
             const ccEl = document.getElementById('ccBalance');
             ccEl.textContent = formatCurrency(currentCC);
@@ -1673,6 +1705,11 @@
             const availableEl = document.getElementById('cardAvailable');
             availableEl.textContent = formatCurrency(cardAvailable);
             availableEl.className = cardAvailable < 0 ? 'text-out' : 'text-in';
+
+            const totalAvailable = currentCC + cardAvailable;
+            const totalAvailableEl = document.getElementById('totalAvailable');
+            totalAvailableEl.textContent = formatCurrency(totalAvailable);
+            totalAvailableEl.className = totalAvailable < 0 ? 'text-out main-balance' : 'text-in main-balance';
 
             const progressBar = document.getElementById('cardProgressBar');
             let usagePercent = creditLimitTotal > 0 ? (cardInvoice / creditLimitTotal) * 100 : 100;
@@ -1826,8 +1863,9 @@
         // EDIÇÃO DE CATEGORIA DIRETO NO EXTRATO
         // =====================================================
         const ALL_CATEGORIES = [
-            'Lanche', 'Transporte', 'Assinatura',
-            'Pets', 'Mercado', 'Farmácia', 'Contas', 'Educação & Esportes',
+            'Lanche', 'Restaurante', 'Transporte', 'Assinatura',
+            'Pets', 'Mercado', 'Farmácia', 'Saúde', 'Contas', 'Casa',
+            'Roupas', 'Lazer', 'Presentes', 'Viagem', 'Educação & Esportes',
             'Receita / Salário', 'Outros'
         ];
 
@@ -2049,7 +2087,9 @@
             return [
                 ['Conta Corrente (disponível hoje)', lastComputedBalances.currentCC],
                 ['Saldo Projetado (com agendados)', lastComputedBalances.projectedCC],
-                ['Limite Total do Cartão', creditLimitTotal]
+                ['Limite Total do Cartão', creditLimitTotal],
+                ['Limite Disponível do Cartão', lastComputedBalances.cardAvailable],
+                ['Saldo Total Disponível (Conta + Cartão)', lastComputedBalances.currentCC + lastComputedBalances.cardAvailable]
             ];
         }
 
@@ -2380,8 +2420,9 @@
         // --- IMPORTAR TRANSAÇÕES VIA JSON (fluxo: foto do cupom → Claude → colar aqui) ---
         const VALID_TYPES = ['entrada', 'gasto_cc', 'gasto_cartao'];
         const VALID_CATEGORIES = [
-            'Lanche', 'Transporte', 'Assinatura',
-            'Pets', 'Mercado', 'Farmácia', 'Contas', 'Educação & Esportes', 'Receita / Salário', 'Outros'
+            'Lanche', 'Restaurante', 'Transporte', 'Assinatura',
+            'Pets', 'Mercado', 'Farmácia', 'Saúde', 'Contas', 'Casa',
+            'Roupas', 'Lazer', 'Presentes', 'Viagem', 'Educação & Esportes', 'Receita / Salário', 'Outros'
         ];
         const VALID_OWNERS = ['Conjunta', 'Marcelo', 'Amanda'];
         let pendingImport = [];
