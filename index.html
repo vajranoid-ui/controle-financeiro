@@ -981,6 +981,31 @@
         </div><!-- fim dashboard-grid -->
 
         <h2 style="margin-top: 40px;">
+            🔁 Gastos Recorrentes Detectados
+            <span class="subtitle-info">descrições que se repetem todo mês no seu histórico</span>
+        </h2>
+        <p style="margin: -10px 0 12px 0; font-size: 0.82rem; color: #64748b;">
+            Detectado automaticamente: lançamentos com a mesma descrição em pelo menos 3 meses diferentes, incluindo algum dos últimos 3 meses. Itens já cadastrados em "Gastos Fixos" não aparecem aqui.
+        </p>
+        <div class="table-scroll">
+        <table class="fixed-expenses-table">
+            <thead>
+                <tr>
+                    <th style="width: 26%;">Descrição</th>
+                    <th style="width: 16%;">Categoria</th>
+                    <th style="width: 14%; text-align: center;">Meses detectados</th>
+                    <th style="width: 15%;">Valor médio</th>
+                    <th style="width: 15%;">Último valor</th>
+                    <th style="width: 14%; text-align: center;">Ação</th>
+                </tr>
+            </thead>
+            <tbody id="recurringBody">
+                <tr><td colspan="6" class="no-data">Analisando seu histórico…</td></tr>
+            </tbody>
+        </table>
+        </div>
+
+        <h2 style="margin-top: 40px;">
             <div>
                 Previsão de Gastos Fixos
                 <button class="btn-action" style="margin-left: 10px; padding: 4px 8px; font-weight: bold;" onclick="addFixedExpense()">➕ Adicionar Novo</button>
@@ -1128,6 +1153,7 @@
                 fixedExpenses = [];
                 snapshot.forEach((d) => fixedExpenses.push({ id: d.id, ...d.data() }));
                 renderFixedExpenses();
+                renderRecurringExpenses();
             });
 
             // Metas de gasto por categoria (sincronizadas na nuvem)
@@ -1439,6 +1465,94 @@
             window.scrollTo({ top: formBox.offsetTop - 20, behavior: 'smooth' });
         }
 
+        // --- GASTOS RECORRENTES DETECTADOS (analisa o histórico, sem depender de cadastro manual) ---
+        function normalizeRecurringKey(str) {
+            return String(str || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+        }
+
+        let detectedRecurring = [];
+
+        function detectRecurringExpenses() {
+            const now = new Date();
+            const groups = {};
+
+            transactions.forEach(t => {
+                if (t.type !== 'gasto_cc' && t.type !== 'gasto_cartao') return;
+                const desc = (t.description || '').trim();
+                const key = desc ? 'd:' + normalizeRecurringKey(desc) : 'c:' + normalizeRecurringKey(t.category);
+                if (!groups[key]) {
+                    groups[key] = { label: desc || (t.category || 'Outros'), category: t.category || 'Outros', months: new Set(), entries: [] };
+                }
+                groups[key].months.add(monthKeyOf(t.date));
+                groups[key].entries.push(t);
+            });
+
+            // Janela de "atividade recente": mês atual + 2 anteriores. Só entra na lista quem
+            // ainda aparece em algum desses meses — evita mostrar algo que parou de se repetir.
+            const recentKeys = new Set();
+            for (let i = 0; i < 3; i++) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                recentKeys.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+            }
+
+            // Já cadastrados manualmente em "Gastos Fixos" não precisam ser sugeridos de novo.
+            const jaFixos = new Set(fixedExpenses.map(exp => normalizeRecurringKey(exp.name)));
+
+            return Object.values(groups)
+                .filter(g => g.months.size >= 3)
+                .filter(g => [...g.months].some(mk => recentKeys.has(mk)))
+                .filter(g => !jaFixos.has(normalizeRecurringKey(g.label)))
+                .map(g => {
+                    const sorted = [...g.entries].sort((a, b) => new Date(b.date) - new Date(a.date));
+                    const avgAmount = g.entries.reduce((s, t) => s + t.amount, 0) / g.entries.length;
+                    return {
+                        label: g.label,
+                        category: g.category,
+                        monthsCount: g.months.size,
+                        lastAmount: sorted[0].amount,
+                        avgAmount
+                    };
+                })
+                .sort((a, b) => b.monthsCount - a.monthsCount || b.lastAmount - a.lastAmount);
+        }
+
+        function renderRecurringExpenses() {
+            const tbody = document.getElementById('recurringBody');
+            detectedRecurring = detectRecurringExpenses();
+
+            if (detectedRecurring.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="no-data">Nenhum gasto recorrente detectado ainda (precisa se repetir em pelo menos 3 meses).</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = '';
+            detectedRecurring.forEach((item, idx) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="font-weight: 500;">${escapeHtml(item.label)}</td>
+                    <td>${escapeHtml(item.category)}</td>
+                    <td style="text-align:center;">${item.monthsCount} meses</td>
+                    <td>${formatCurrency(item.avgAmount)}</td>
+                    <td>${formatCurrency(item.lastAmount)}</td>
+                    <td style="text-align: center;">
+                        <button class="btn-migrate" onclick="promoteDetectedToFixed(${idx})">➕ Cadastrar como Fixo</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        window.promoteDetectedToFixed = async function(idx) {
+            const item = detectedRecurring[idx];
+            if (!item) return;
+            if (!confirm(`Cadastrar "${item.label}" como gasto fixo, com valor previsto de ${formatCurrency(item.lastAmount)}?`)) return;
+            await addDoc(collection(db, "fixed_expenses"), {
+                name: item.label,
+                amount: item.lastAmount,
+                cat: item.category
+            });
+        }
+
         // --- GASTOS FIXOS (agora sem interpolar nomes em onclick: evita quebra com aspas) ---
         function renderFixedExpenses() {
             const tbody = document.getElementById('fixedExpensesBody');
@@ -1720,6 +1834,7 @@
             else progressBar.style.backgroundColor = 'var(--danger)';
 
             renderFixedExpenses();
+            renderRecurringExpenses();
             renderPlanningPanel();
             renderCategorySummary(selYear, selMonth);
             renderArchive(now);
